@@ -1,2 +1,18 @@
 AGENTS.md
 .claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# uv
+.venv/
+
+# Tool caches
+.ruff_cache/
+.pyright/
+
+# Local run artifacts
+runs/
+logs/
