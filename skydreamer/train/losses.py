@@ -16,20 +16,24 @@ def segmentation_loss(logits: Tensor, target: Tensor) -> tuple[Tensor, Tensor, T
     return total, bce, dice
 
 
-def gaussian_kl(post_mean: Tensor, post_std: Tensor, prior_mean: Tensor, prior_std: Tensor) -> Tensor:
-    var_ratio = (post_std.pow(2) + (post_mean - prior_mean).pow(2)) / (prior_std.pow(2) + 1e-6)
-    kl = torch.log(prior_std / (post_std + 1e-6) + 1e-6) + 0.5 * var_ratio - 0.5
+def categorical_kl(
+    post_logits: Tensor,
+    post_probs: Tensor,
+    prior_logits: Tensor,
+) -> Tensor:
+    log_post = nn.functional.log_softmax(post_logits, dim=-1)
+    log_prior = nn.functional.log_softmax(prior_logits, dim=-1)
+    kl = (post_probs * (log_post - log_prior)).sum(dim=-1)
     return kl.sum(dim=-1, keepdim=True)
 
 
 def kl_with_free_bits(
-    post_mean: Tensor,
-    post_std: Tensor,
-    prior_mean: Tensor,
-    prior_std: Tensor,
+    post_logits: Tensor,
+    post_probs: Tensor,
+    prior_logits: Tensor,
     free_bits: float,
 ) -> Tensor:
-    kl = gaussian_kl(post_mean, post_std, prior_mean, prior_std)
+    kl = categorical_kl(post_logits, post_probs, prior_logits)
     return torch.maximum(kl, torch.full_like(kl, free_bits)).mean()
 
 
@@ -79,4 +83,3 @@ def action_smoothness_loss(action_means: Tensor) -> Tensor:
         return torch.zeros((), device=action_means.device)
     deltas = action_means[:, 1:] - action_means[:, :-1]
     return deltas.pow(2).mean()
-

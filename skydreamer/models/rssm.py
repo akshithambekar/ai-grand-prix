@@ -18,8 +18,8 @@ from skydreamer.models.segmentation import SegmentationUNet
 class RSSMState:
     deter: Tensor
     stoch: Tensor
-    mean: Tensor
-    std: Tensor
+    logits: Tensor
+    probs: Tensor
 
     def feature(self) -> Tensor:
         return torch.cat([self.deter, self.stoch], dim=-1)
@@ -35,8 +35,8 @@ class RecurrentState:
             rssm=RSSMState(
                 deter=self.rssm.deter.detach(),
                 stoch=self.rssm.stoch.detach(),
-                mean=self.rssm.mean.detach(),
-                std=self.rssm.std.detach(),
+                logits=self.rssm.logits.detach(),
+                probs=self.rssm.probs.detach(),
             ),
             prev_action=self.prev_action.detach(),
         )
@@ -46,10 +46,10 @@ class RecurrentState:
 class PosteriorRollout:
     segmentation_logits: Tensor
     segmentation_probs: Tensor
-    prior_mean: Tensor
-    prior_std: Tensor
-    posterior_mean: Tensor
-    posterior_std: Tensor
+    prior_logits: Tensor
+    prior_probs: Tensor
+    posterior_logits: Tensor
+    posterior_probs: Tensor
     features: Tensor
     privileged_state: Tensor
     reward: Tensor
@@ -127,26 +127,31 @@ class RSSMCore(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.config = config
-        self.gru = nn.GRUCell(config.rssm.stoch_size + config.motor_dim, config.rssm.deter_size)
+        self.gru = nn.GRUCell(config.rssm.stoch_dim + config.motor_dim, config.rssm.deter_size)
         self.prior = nn.Sequential(
             nn.Linear(config.rssm.deter_size, config.rssm.hidden_size),
             nn.LayerNorm(config.rssm.hidden_size),
             nn.SiLU(),
-            nn.Linear(config.rssm.hidden_size, config.rssm.stoch_size * 2),
+            nn.Linear(config.rssm.hidden_size, config.rssm.stoch_dim),
         )
         self.posterior = nn.Sequential(
             nn.Linear(config.rssm.deter_size + config.obs_embed_dim, config.rssm.hidden_size),
             nn.LayerNorm(config.rssm.hidden_size),
             nn.SiLU(),
-            nn.Linear(config.rssm.hidden_size, config.rssm.stoch_size * 2),
+            nn.Linear(config.rssm.hidden_size, config.rssm.stoch_dim),
         )
 
     def initial_rssm_state(self, batch_size: int, device: torch.device | str) -> RSSMState:
         deter = torch.zeros(batch_size, self.config.rssm.deter_size, device=device)
-        stoch = torch.zeros(batch_size, self.config.rssm.stoch_size, device=device)
-        mean = torch.zeros(batch_size, self.config.rssm.stoch_size, device=device)
-        std = torch.ones(batch_size, self.config.rssm.stoch_size, device=device)
-        return RSSMState(deter=deter, stoch=stoch, mean=mean, std=std)
+        logits = torch.zeros(
+            batch_size,
+            self.config.rssm.stoch_size,
+            self.config.rssm.stoch_classes,
+            device=device,
+        )
+        probs = logits.softmax(dim=-1)
+        stoch = self._sample_discrete(logits, sample=False)
+        return RSSMState(deter=deter, stoch=stoch, logits=logits, probs=probs)
 
     def step_prior(
         self,
@@ -156,10 +161,10 @@ class RSSMCore(nn.Module):
         sample: bool = True,
     ) -> RSSMState:
         deter = self.gru(torch.cat([prev_state.stoch, prev_action], dim=-1), prev_state.deter)
-        stats = self.prior(deter)
-        mean, std = self._split_stats(stats)
-        stoch = mean + std * torch.randn_like(mean) if sample else mean
-        return RSSMState(deter=deter, stoch=stoch, mean=mean, std=std)
+        logits = self._reshape_logits(self.prior(deter))
+        probs = logits.softmax(dim=-1)
+        stoch = self._sample_discrete(logits, sample=sample)
+        return RSSMState(deter=deter, stoch=stoch, logits=logits, probs=probs)
 
     def step_posterior(
         self,
@@ -168,15 +173,23 @@ class RSSMCore(nn.Module):
         *,
         sample: bool = True,
     ) -> RSSMState:
-        stats = self.posterior(torch.cat([prior_state.deter, obs_embed], dim=-1))
-        mean, std = self._split_stats(stats)
-        stoch = mean + std * torch.randn_like(mean) if sample else mean
-        return RSSMState(deter=prior_state.deter, stoch=stoch, mean=mean, std=std)
+        logits = self._reshape_logits(self.posterior(torch.cat([prior_state.deter, obs_embed], dim=-1)))
+        probs = logits.softmax(dim=-1)
+        stoch = self._sample_discrete(logits, sample=sample)
+        return RSSMState(deter=prior_state.deter, stoch=stoch, logits=logits, probs=probs)
 
-    def _split_stats(self, stats: Tensor) -> tuple[Tensor, Tensor]:
-        mean, raw_std = torch.chunk(stats, 2, dim=-1)
-        std = nn.functional.softplus(raw_std) + self.config.rssm.min_std
-        return mean, std
+    def _reshape_logits(self, logits: Tensor) -> Tensor:
+        return logits.view(-1, self.config.rssm.stoch_size, self.config.rssm.stoch_classes)
+
+    def _sample_discrete(self, logits: Tensor, *, sample: bool) -> Tensor:
+        if sample:
+            stoch = nn.functional.gumbel_softmax(logits, tau=1.0, hard=True, dim=-1)
+        else:
+            indices = logits.argmax(dim=-1)
+            stoch = nn.functional.one_hot(indices, num_classes=self.config.rssm.stoch_classes).to(
+                logits.dtype
+            )
+        return stoch.flatten(start_dim=1)
 
 
 class SkyDreamerWorldModel(nn.Module):
@@ -209,10 +222,10 @@ class SkyDreamerWorldModel(nn.Module):
         seg_logits = self.segmentation(flat_rgb).view(batch_size, sequence_length, 1, 64, 64)
         seg_probs = seg_logits.sigmoid()
 
-        prior_means: list[Tensor] = []
-        prior_stds: list[Tensor] = []
-        posterior_means: list[Tensor] = []
-        posterior_stds: list[Tensor] = []
+        prior_logits: list[Tensor] = []
+        prior_probs: list[Tensor] = []
+        posterior_logits: list[Tensor] = []
+        posterior_probs: list[Tensor] = []
         features: list[Tensor] = []
 
         for time_index in range(sequence_length):
@@ -227,10 +240,10 @@ class SkyDreamerWorldModel(nn.Module):
             prior_state = self.rssm.step_prior(state.rssm, state.prev_action)
             posterior_state = self.rssm.step_posterior(prior_state, obs_embed)
 
-            prior_means.append(prior_state.mean)
-            prior_stds.append(prior_state.std)
-            posterior_means.append(posterior_state.mean)
-            posterior_stds.append(posterior_state.std)
+            prior_logits.append(prior_state.logits)
+            prior_probs.append(prior_state.probs)
+            posterior_logits.append(posterior_state.logits)
+            posterior_probs.append(posterior_state.probs)
             features.append(posterior_state.feature())
 
             state = RecurrentState(rssm=posterior_state, prev_action=batch.action[:, time_index])
@@ -239,10 +252,10 @@ class SkyDreamerWorldModel(nn.Module):
         return PosteriorRollout(
             segmentation_logits=seg_logits,
             segmentation_probs=seg_probs,
-            prior_mean=torch.stack(prior_means, dim=1),
-            prior_std=torch.stack(prior_stds, dim=1),
-            posterior_mean=torch.stack(posterior_means, dim=1),
-            posterior_std=torch.stack(posterior_stds, dim=1),
+            prior_logits=torch.stack(prior_logits, dim=1),
+            prior_probs=torch.stack(prior_probs, dim=1),
+            posterior_logits=torch.stack(posterior_logits, dim=1),
+            posterior_probs=torch.stack(posterior_probs, dim=1),
             features=stacked_features,
             privileged_state=self.privileged_head(stacked_features),
             reward=self.reward_head(stacked_features),
@@ -276,10 +289,10 @@ class SkyDreamerWorldModel(nn.Module):
             "segmentation_logits": seg_logits,
             "segmentation_probs": seg_probs,
             "feature": posterior_state.feature(),
-            "prior_mean": prior_state.mean,
-            "prior_std": prior_state.std,
-            "posterior_mean": posterior_state.mean,
-            "posterior_std": posterior_state.std,
+            "prior_logits": prior_state.logits,
+            "prior_probs": prior_state.probs,
+            "posterior_logits": posterior_state.logits,
+            "posterior_probs": posterior_state.probs,
         }
         return next_state, aux
 
@@ -303,7 +316,7 @@ class SkyDreamerWorldModel(nn.Module):
         for _ in range(horizon):
             feature = state.rssm.feature()
             actor_output = actor(feature)
-            prior_state = self.rssm.step_prior(state.rssm, state.prev_action)
+            prior_state = self.rssm.step_prior(state.rssm, actor_output.action)
             state = RecurrentState(rssm=prior_state, prev_action=actor_output.action)
 
             features.append(feature)

@@ -83,10 +83,9 @@ class SkyDreamerTrainer:
             posterior.segmentation_logits, batch.seg_target
         )
         kl_loss = kl_with_free_bits(
-            posterior.posterior_mean,
-            posterior.posterior_std,
-            posterior.prior_mean,
-            posterior.prior_std,
+            posterior.posterior_logits,
+            posterior.posterior_probs,
+            posterior.prior_logits,
             cfg.free_bits,
         )
         privileged_loss = masked_mse(posterior.privileged_state, batch.privileged_state)
@@ -111,8 +110,10 @@ class SkyDreamerTrainer:
             lambda_=cfg.lambda_,
         )
         critic_loss = torch.nn.functional.huber_loss(imagined_values, lambda_ret.detach())
-        actor_objective = (lambda_ret - cfg.entropy_scale * imagined.entropies).mean()
+        advantage = (lambda_ret - imagined_values).detach()
+        actor_objective = imagined.log_probs * advantage + cfg.entropy_scale * imagined.entropies
         actor_loss = -actor_objective
+        actor_loss = actor_loss.mean()
         smooth_loss = action_smoothness_loss(imagined.action_means)
 
         total_loss = (
@@ -142,4 +143,3 @@ class SkyDreamerTrainer:
             "lambda_return_mean": lambda_ret.mean(),
         }
         return total_loss, metrics
-

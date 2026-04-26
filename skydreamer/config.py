@@ -16,8 +16,12 @@ class SegmentationConfig:
 class RSSMConfig:
     deter_size: int = 512
     stoch_size: int = 32
+    stoch_classes: int = 32
     hidden_size: int = 512
-    min_std: float = 0.1
+
+    @property
+    def stoch_dim(self) -> int:
+        return self.stoch_size * self.stoch_classes
 
 
 @dataclass(frozen=True)
@@ -31,9 +35,12 @@ class ModelConfig:
     privileged_state_dim: int = 13
     gate_progress_classes: int = 32
     obs_embed_dim: int = 256
-    feature_dim: int = 544
     actor_hidden_dim: int = 512
     critic_hidden_dim: int = 512
+
+    @property
+    def feature_dim(self) -> int:
+        return self.rssm.deter_size + self.rssm.stoch_dim
 
 
 @dataclass(frozen=True)
@@ -61,4 +68,3 @@ class TrainingConfig:
 class SkyDreamerConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
-
