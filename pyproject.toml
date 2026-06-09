@@ -4,9 +4,21 @@ version = "0.1.0"
 description = "Reliability-first autonomy stack for the AI Grand Prix simulator."
 requires-python = ">=3.14,<3.15"
 dependencies = [
+    "huggingface-hub",
     "numpy",
+    "opencv-python",
+    "pymavlink",
     "torch",
+    "ultralytics",
 ]
+
+[project.scripts]
+perception-calibrate = "perception.calibration:main"
+perception-record-dataset = "perception.record_dataset:main"
+perception-generate-labels = "perception.generate_labels:main"
+perception-review-labels = "perception.review_labels:main"
+perception-train-yolo = "perception.train_yolo:main"
+perception-evaluate-replay = "perception.evaluate_replay:main"
 
 [build-system]
 requires = ["setuptools>=69"]
