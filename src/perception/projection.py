@@ -23,12 +23,7 @@ class ProjectionSettings:
 class ProjectionEngine:
     """Projects the telemetry-selected active gate into image space."""
 
-    def __init__(
-        self,
-        calibration: CameraCalibration,
-        *,
-        settings: ProjectionSettings | None = None,
-    ) -> None:
+    def __init__(self, calibration: CameraCalibration, *, settings: ProjectionSettings | None = None) -> None:
         self._calibration = calibration
         self._settings = settings or ProjectionSettings()
 
