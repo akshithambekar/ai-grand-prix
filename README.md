@@ -113,8 +113,6 @@ The perception stack currently has two modes:
 1. Offline tooling for calibration, dataset generation, review, training, and replay evaluation
 2. A live `PerceptionRunner` runtime API for simulator ingest and inference
 
-There is not yet a dedicated `perception-runner` CLI entrypoint. To run live perception today, use the PowerShell launcher below.
-
 ## Live Perception Runner
 
 Before running live inference you need:
@@ -122,77 +120,20 @@ Before running live inference you need:
 - a camera calibration JSON produced by `perception-calibrate`
 - optionally, trained YOLO weights from `perception-train-yolo`
 
-If you do not pass weights, the runner still performs ingest, synchronization, and projection, but it will report `detector_not_configured` instead of model detections.
+If you do not pass `--weights`, the runner still performs ingest, synchronization, and projection, but it will report `detector_not_configured` instead of model detections.
 
 ### Start live perception from PowerShell
 
 From the repo root:
 
 ```powershell
-@'
-import time
-from pathlib import Path
-
-from pymavlink import mavutil
-
-from perception.main import PerceptionRunner
-
-SIM_HOST = "127.0.0.1"
-MAVLINK_PORT = 14550
-VISION_HOST = "0.0.0.0"
-VISION_PORT = 5600
-
-CALIBRATION_PATH = Path("artifacts/perception/calibration/camera_calibration.json")
-WEIGHTS_PATH = Path("runs/perception/latest/best.pt")
-
-conn = mavutil.mavlink_connection(f"udpin:{SIM_HOST}:{MAVLINK_PORT}")
-print("Waiting for heartbeat...")
-conn.wait_heartbeat()
-print(f"Connected to system {conn.target_system}")
-
-runner = PerceptionRunner(
-    mavlink_connection=conn,
-    vision_host=VISION_HOST,
-    vision_port=VISION_PORT,
-    calibration_path=CALIBRATION_PATH,
-    detector_weights_path=WEIGHTS_PATH if WEIGHTS_PATH.exists() else None,
-    detector_device="cuda:0",
-)
-
-runner.start()
-print("Perception runner started. Press Ctrl+C to stop.")
-
-try:
-    while True:
-        result = runner.get_latest_result()
-        if result is not None:
-            print(
-                {
-                    "frame_id": result.frame_id,
-                    "telemetry_timestamp_ns": result.telemetry_timestamp_ns,
-                    "active_gate_index": result.active_gate_index,
-                    "inference_path": result.inference_path,
-                    "detection_confidence": result.detection_confidence,
-                    "projection_confidence": result.projection_confidence,
-                    "bbox_xyxy": result.bbox_xyxy,
-                    "failure_reason": result.failure_reason,
-                }
-            )
-        time.sleep(0.1)
-except KeyboardInterrupt:
-    pass
-finally:
-    runner.stop()
-    print("Perception runner stopped.")
-'@ | uv run python -
+uv run perception-run-live `
+  --calibration artifacts/perception/calibration/camera_calibration.json `
+  --weights runs/perception/latest/best.pt `
+  --device cuda:0
 ```
 
-Update these paths before running:
-
-- `CALIBRATION_PATH`
-- `WEIGHTS_PATH`
-
-If `WEIGHTS_PATH` does not exist, the script still runs but only exercises synchronization and projection.
+All flags are optional and default to the values shown above. Pass `--sim-host`, `--mavlink-port`, `--vision-host`, or `--vision-port` to override the simulator connection if needed.
 
 ## Offline Perception Commands
 
@@ -301,6 +242,6 @@ On the Windows GPU machine, the least error-prone order is:
 
 ## Current Limitations
 
-- There is no dedicated live CLI wrapper yet; live inference is currently started through the `PerceptionRunner` API.
+- The `perception-run-live` entrypoint prints raw result dicts; it does not yet write structured logs or publish MAVLink output.
 - Calibration sample creation is not yet automated end-to-end. The calibration command expects a manifest with observed gate corners.
 - The projection math assumes the current gate/body/camera frame conventions encoded in `src/perception/geometry.py`. Verify overlay alignment on real recordings before trusting training outputs.

@@ -19,6 +19,7 @@ perception-generate-labels = "perception.generate_labels:main"
 perception-review-labels = "perception.review_labels:main"
 perception-train-yolo = "perception.train_yolo:main"
 perception-evaluate-replay = "perception.evaluate_replay:main"
+perception-run-live = "perception.runner:main"
 
 [build-system]
 requires = ["setuptools>=69"]
