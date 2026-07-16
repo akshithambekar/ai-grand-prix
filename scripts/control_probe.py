@@ -19,6 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+LOG_DIR = REPO_ROOT / "artifacts" / "control_probe"
+
 from controls.mavlink_rx import MAVLinkRX
 from controls.vision_rx import VisionRX
 from scripts.reset_hotkey import ResetHotkey
@@ -26,6 +28,9 @@ from scripts.reset_hotkey import ResetHotkey
 
 CONTROL_HZ = 50.0
 MAVLINK_CMD_SIM_RESET = 31000
+# The simulator runs a 3s on-screen countdown after every reset. Hold this margin
+# past the reset send time before arming or issuing any drone command.
+RESET_SETTLE_S = 4.0
 RATES_ATTITUDE_MASK = mavutil.mavlink.ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE
 
 
@@ -55,6 +60,7 @@ class ControlProbe:
         self.state = "RESETTING"
         self.stop_requested = False
         self.last_arm_sent_at = 0.0
+        Path(args.log).resolve().parent.mkdir(parents=True, exist_ok=True)
         self.log_file = open(args.log, "w", newline="", buffering=1)
         self.writer = csv.DictWriter(self.log_file, fieldnames=[
             "wall_time", "state", "phase", "phase_elapsed",
@@ -72,8 +78,8 @@ class ControlProbe:
         rate = self.args.pulse_rate
         duration = self.args.phase_duration
         return [
-            ProbePhase("thrust_low", duration, 0.0, 0.0, 0.0, h - step),
             ProbePhase("thrust_hover", duration, 0.0, 0.0, 0.0, h),
+            ProbePhase("thrust_low", duration, 0.0, 0.0, 0.0, h - step),
             ProbePhase("thrust_high", duration, 0.0, 0.0, 0.0, h + step),
             ProbePhase("roll_positive", duration, rate, 0.0, 0.0, h),
             ProbePhase("roll_negative", duration, -rate, 0.0, 0.0, h),
@@ -142,6 +148,8 @@ class ControlProbe:
             return
 
         if self.state == "WAITING_FOR_ARM":
+            if now - self.reset_sent_at < RESET_SETTLE_S:
+                return
             if self.data.get("armed"):
                 self.phase_started_at = now
                 # Reset/launch collisions may remain in shared_data. Only events
@@ -254,7 +262,7 @@ def parse_args():
     parser.add_argument("--thrust-step", type=float, default=0.015)
     parser.add_argument("--pulse-rate", type=float, default=0.05)
     parser.add_argument("--phase-duration", type=float, default=0.75)
-    parser.add_argument("--log", default=f"control_probe_{int(time.time())}.csv")
+    parser.add_argument("--log", default=str(LOG_DIR / f"control_probe_{int(time.time())}.csv"))
     return parser.parse_args()
 
 
