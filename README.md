@@ -1,5 +1,29 @@
 Code for Anduril's AI Grand Prix
 
+## Setup
+
+Install [uv](https://docs.astral.sh/uv/) and sync the locked environment:
+
+```bash
+uv sync
+```
+
+Run the MAVLink client with:
+
+```bash
+uv run python PyAIPilotExample-v2/main.py
+```
+
+Run the standalone reset listener with:
+
+```bash
+uv run python PyAIPilotExample-v2/reset_hotkey.py
+```
+
+On Windows, keep the terminal window focused while pressing `K`.
+
+Dependencies are declared in `pyproject.toml` and pinned in `uv.lock`.
+
 # Progress tracker
 
 ## Vision: red gate detection

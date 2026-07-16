@@ -1,0 +1,16 @@
+[project]
+name = "ai-grand-prix"
+version = "0.1.0"
+description = "MAVLink client for Anduril's AI Grand Prix simulator"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "keyboard",
+    "matplotlib",
+    "numpy",
+    "opencv-python",
+    "pymavlink",
+]
+
+[tool.uv]
+package = false

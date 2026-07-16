@@ -6,6 +6,7 @@ no other process is bound to the simulator's MAVLink UDP port.
 """
 
 import argparse
+import os
 import threading
 import time
 
@@ -36,16 +37,43 @@ def send_sim_reset(mavlink_connection):
 
 
 class ResetHotkey:
-    """Convert global K presses into reset requests consumed by the control loop."""
+    """Convert K presses into reset requests consumed by the control loop.
+
+    Windows terminals use their console input buffer instead of the ``keyboard``
+    package's global hook. The terminal must have focus when K is pressed.
+    """
 
     def __init__(self):
         self._requested = threading.Event()
-        self._hotkey = keyboard.add_hotkey(
-            "k",
-            self._requested.set,
-            suppress=False,
-            trigger_on_release=True,
-        )
+        self._stop = threading.Event()
+        self._hotkey = None
+        self._reader_thread = None
+
+        if os.name == "nt":
+            self._reader_thread = threading.Thread(
+                target=self._read_windows_console,
+                name="reset-hotkey-reader",
+                daemon=True,
+            )
+            self._reader_thread.start()
+        else:
+            self._hotkey = keyboard.add_hotkey(
+                "k",
+                self._requested.set,
+                suppress=False,
+                trigger_on_release=True,
+            )
+
+    def _read_windows_console(self):
+        import msvcrt
+
+        while not self._stop.is_set():
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+                if key.lower() == "k":
+                    self._requested.set()
+            else:
+                time.sleep(0.02)
 
     def consume_request(self):
         """Return True once for each observed request state."""
@@ -55,7 +83,11 @@ class ResetHotkey:
         return True
 
     def close(self):
-        keyboard.remove_hotkey(self._hotkey)
+        self._stop.set()
+        if self._hotkey is not None:
+            keyboard.remove_hotkey(self._hotkey)
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=1.0)
 
 
 def _parse_args():
@@ -97,4 +129,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
