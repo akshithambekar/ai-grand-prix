@@ -79,7 +79,6 @@ class ControlProbe:
         duration = self.args.phase_duration
         return [
             ProbePhase("thrust_hover", duration, 0.0, 0.0, 0.0, h),
-            # ProbePhase("thrust_low", duration, 0.0, 0.0, 0.0, h - step),
             ProbePhase("thrust_high", duration, 0.0, 0.0, 0.0, h + step),
             ProbePhase("roll_positive", duration, rate, 0.0, 0.0, h),
             ProbePhase("roll_negative", duration, -rate, 0.0, 0.0, h),
@@ -87,6 +86,7 @@ class ControlProbe:
             ProbePhase("pitch_negative", duration, 0.0, -rate, 0.0, h),
             ProbePhase("yaw_positive", duration, 0.0, 0.0, rate, h),
             ProbePhase("yaw_negative", duration, 0.0, 0.0, -rate, h),
+            ProbePhase("thrust_low", duration, 0.0, 0.0, 0.0, h - step),
         ]
 
     def run(self):
