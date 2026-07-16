@@ -147,10 +147,14 @@ class VisionRX:
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind((SIM_SERVER_UDP_IP, SIM_SERVER_UDP_PORT))
+        sock.settimeout(0.2)
         print("Listening for camera frames...")
 
         while self.is_running:
-            packet, addr = sock.recvfrom(65536)  # max UDP size
+            try:
+                packet, addr = sock.recvfrom(65536)  # max UDP size
+            except socket.timeout:
+                continue
 
             header = packet[:header_sz]
             payload = packet[header_sz:]
