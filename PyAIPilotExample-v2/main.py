@@ -4,6 +4,7 @@
 
 import time
 
+from reset_hotkey import ResetHotkey
 from setup import setup_components
 
 # Modify these properties if you want to run the server remotely for example
@@ -26,9 +27,18 @@ vision_rx = components['vision_rx']
 print("Arming drone...", flush=True)
 controller.arm()
 print("Starting control loop...", flush=True)
+reset_hotkey = ResetHotkey()
 is_running = True
-while is_running:
-    controller.update()
+try:
+    while is_running:
+        if reset_hotkey.consume_request():
+            controller.send_sim_reset_command()
+            print("Reset command sent.", flush=True)
+        controller.update()
+except KeyboardInterrupt:
+    print("Stopping client...", flush=True)
+finally:
+    reset_hotkey.close()
 
 # exit
 ts_loop.get_thread_for_join().join(timeout=1.0)
