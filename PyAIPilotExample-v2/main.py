@@ -2,9 +2,17 @@
 # Sample Python client for the AI GP controller
 #
 
+import sys
 import time
+from pathlib import Path
 
-from reset_hotkey import ResetHotkey
+# The project is not packaged, so expose the repository-level scripts package when
+# main.py is launched from inside PyAIPilotExample-v2.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.reset_hotkey import ResetHotkey
 from setup import setup_components
 
 # Modify these properties if you want to run the server remotely for example

@@ -17,6 +17,7 @@ class MAVLinkRX:
 
         self.track_chunks = {}
         self.expected_num_track_chunks = {}
+        self.collision_sequence = 0
 
     @classmethod
     def create_mavlink_rx(cls, mavlink_connection, data):
@@ -135,7 +136,12 @@ class MAVLinkRX:
                 self.expected_num_track_chunks[track_data_transfer_id] = msg.packets
 
     def on_heartbeat(self, msg):
-        armed = msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+        armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+        self.data["armed"] = armed
+        self.data["heartbeat"] = {
+            "armed": armed,
+            "received_at_s": time.monotonic(),
+        }
 
     def on_timesync(self, msg):
         request_time = msg.ts1
@@ -188,9 +194,16 @@ class MAVLinkRX:
         reset_count = msg.reset_counter
 
     def on_highres_imu(self, msg):
-        acceleration_x, acceleration_y, acceleration_z = msg.xacc, msg.yacc, msg.zacc
-        gyro_x, gyro_y, gyro_z = msg.xgyro, msg.ygyro, msg.zgyro
-        time_boot_us = msg.time_usec
+        self.data["imu"] = {
+            "time_usec": msg.time_usec,
+            "xacc": msg.xacc,
+            "yacc": msg.yacc,
+            "zacc": msg.zacc,
+            "xgyro": msg.xgyro,
+            "ygyro": msg.ygyro,
+            "zgyro": msg.zgyro,
+            "received_at_s": time.monotonic(),
+        }
 
     def on_encapsulated_data(self, msg):
         if msg:
@@ -212,6 +225,14 @@ class MAVLinkRX:
         # last_gate_race_time - race time in seconds when last gate was passed
         data_type, sim_boot_time_ms, race_start_boot_time_ms, race_finish_time_ns, active_gate_index, last_gate_race_time = struct.unpack_from(
             "<BQqqIq", raw_payload)
+        self.data["race_status"] = {
+            "sim_boot_time_ms": sim_boot_time_ms,
+            "race_start_boot_time_ms": race_start_boot_time_ms,
+            "race_finish_time_ns": race_finish_time_ns,
+            "active_gate_index": active_gate_index,
+            "last_gate_race_time": last_gate_race_time,
+            "received_at_s": time.monotonic(),
+        }
 
     def on_track_data_packet(self, msg):
         raw_payload = bytes(msg.data)
@@ -264,7 +285,12 @@ class MAVLinkRX:
         # Collision IDs
         # 1001 - Gate
         # 1002 - Environment
-        collision_id = msg.id
-
-        threat_level = msg.threat_level # 1-2 with 2 being higher impact collision
-        impact = msg.horizontal_minimum_delta # this is not a delta - it is the impulse magnitude in kg m/s
+        self.collision_sequence += 1
+        self.data["collision"] = {
+            "sequence": self.collision_sequence,
+            "collision_id": msg.id,
+            "threat_level": msg.threat_level,
+            # MAVLink reuses this field for collision impulse magnitude in kg m/s.
+            "impulse": msg.horizontal_minimum_delta,
+            "received_at_s": time.monotonic(),
+        }

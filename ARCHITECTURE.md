@@ -137,6 +137,42 @@ reward = gamma * potential_next - potential_current
 
 Clip per-step area progress so a target switch cannot create a reward spike. Race status is used for reward and episode bookkeeping, never as a policy observation. Do not add a survival reward because it encourages hovering.
 
+## Episode lifecycle and reset handshake
+
+Simulator reset command `31000` has been verified. Every reset starts a three-second on-screen countdown during which the drone must not move. Treat this as an environment state, not as part of the next rollout:
+
+```text
+ACTIVE
+  |
+  | termination condition
+  v
+RESET_REQUESTED -- send command 31000 once
+  |
+  | fresh reset race status observed
+  v
+COUNTDOWN -- publish no flight-control commands
+  |
+  | simulator race-start time reached
+  v
+AWAIT_FRESH_FRAME -- clear temporal state and wait for a post-countdown frame
+  |
+  v
+ACTIVE -- return the initial observation and begin collecting transitions
+```
+
+Do not implement the countdown as a blind `sleep(3)`. Use fresh race-status timestamps so OS scheduling and UDP delay cannot start the policy early. Capture the pre-reset race-status snapshot, send the reset once, and require a new reset epoch before accepting `active_gate_index == 0`. Gate index alone is insufficient because it may already be zero when an episode fails at the first gate.
+
+During `COUNTDOWN`:
+
+- do not call the policy;
+- do not append transitions to PPO's rollout;
+- do not send attitude, rate, thrust, or motor commands;
+- continue receiving MAVLink and vision packets;
+- clear the target tracker, frame deltas, previous action, reward potential, timers, and collision deduplication state;
+- begin the episode only after the countdown completes and a fresh camera frame arrives.
+
+If race status exposes a future `race_start_boot_time_ms`, transition when `sim_boot_time_ms >= race_start_boot_time_ms`. Also require the start timestamp to belong to the new reset epoch rather than a stale UDP packet.
+
 ## Limited-simulator training
 
 Use one `DummyVecEnv` and a 100 ms action step. Train with feature-level randomization:
@@ -158,5 +194,14 @@ Training progression:
 5. Increase authority only while deterministic evaluation remains stable.
 6. Evaluate every tenth episode with feature noise disabled.
 
-An episode ends on course completion, collision, unrecoverable stall, or sustained gate loss. Reset with MAVLink command `31000`, then wait for fresh race status and re-arm. If the qualifier ignores the reset command, automate the simulator restart UI and retain MAVLink for flight control.
+An episode ends on course completion, collision, per-gate timeout, unrecoverable stall, sustained gate loss, vision-stream failure, or the wall-clock episode cap. Record a terminal transition, send reset command `31000`, and complete the reset handshake above before returning the next initial observation.
 
+## Implementation order
+
+1. **Publish observable MAVLink state.** Update `mavlink_rx.py` so heartbeat/armed state, `HIGHRES_IMU`, race status, and collision events reach `shared_data` as complete immutable snapshots. Add a receive timestamp and a monotonically increasing event sequence where deduplication matters. Unit-test each handler with fake MAVLink messages.
+2. **Build the episode state machine.** Implement `ACTIVE`, `RESET_REQUESTED`, `COUNTDOWN`, and `AWAIT_FRESH_FRAME`; enforce the three-second no-command period through fresh race status rather than wall-clock sleeping.
+3. **Implement termination and metrics.** Start with per-gate timeout, environment collision, severe gate collision, vision-stream stall, and a wall-clock cap. Log a reset-reason histogram and per-episode gate/split/detection/control-rate metrics.
+4. **Add target continuity.** Publish all valid gate candidates, associate the current target, reject exit fragments, and switch targets after a confirmed pass.
+5. **Implement and validate the conservative visual servo.** Require repeatable first-gate passage and then a full-course attempt with PPO residual scale zero.
+6. **Wrap the runner as a Gymnasium environment.** Validate observations, rewards, terminal observations, and reset boundaries before connecting SB3.
+7. **Train residual PPO.** Begin with small action authority, feature-level randomization, frequent deterministic evaluation, and checkpointing.
