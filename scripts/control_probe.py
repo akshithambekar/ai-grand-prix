@@ -51,6 +51,7 @@ class ControlProbe:
         self.reset_reference_start = None
         self.phase_index = 0
         self.phase_started_at = None
+        self.phase_collision_sequence = 0
         self.state = "RESETTING"
         self.stop_requested = False
         self.last_arm_sent_at = 0.0
@@ -143,6 +144,10 @@ class ControlProbe:
         if self.state == "WAITING_FOR_ARM":
             if self.data.get("armed"):
                 self.phase_started_at = now
+                # Reset/launch collisions may remain in shared_data. Only events
+                # received after this phase becomes active can terminate it.
+                collision = self.data.get("collision") or {}
+                self.phase_collision_sequence = collision.get("sequence", 0)
                 self.state = "RUNNING"
                 print(f"Starting phase: {self.phases()[self.phase_index].name}", flush=True)
             elif now - self.last_arm_sent_at >= 1.0:
@@ -153,7 +158,10 @@ class ControlProbe:
         if self.state == "RUNNING":
             if self.data.get("collision"):
                 collision = self.data["collision"]
-                if collision.get("received_at_s", 0.0) >= self.phase_started_at:
+                is_new_collision = (
+                    collision.get("sequence", 0) > self.phase_collision_sequence
+                )
+                if is_new_collision and collision.get("received_at_s", 0.0) >= self.phase_started_at:
                     print("Collision observed; stopping probe.", flush=True)
                     self.request_reset()
                     self.stop_requested = True
