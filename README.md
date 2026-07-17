@@ -55,7 +55,7 @@ uv run python scripts\random_action_probe.py --execute --episodes 2
 Run the first 512-step PPO smoke rollout:
 
 ```powershell
-uv run python scripts\train_ppo.py --execute --target-gates 1 --total-timesteps 512
+uv run python scripts/train_ppo.py --execute --target-gates 1 --total-timesteps 100000
 ```
 
 The MLP PPO policy explicitly uses `device="cpu"`, which is the Stable-Baselines3
