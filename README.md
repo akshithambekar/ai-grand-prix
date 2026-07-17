@@ -121,3 +121,5 @@ The velocity estimate needs a timestamp, and wall-clock time would drift against
 **Cost is about 1.5ms per frame**, roughly 4% of the 33ms budget at 30Hz, so the detector runs inline without stalling the receive loop.
 Debug image dumping is the only slow step and is rate-limited.
 Set `VISION_DEBUG_DIR` to dump source and mask pairs for offline inspection.
+
+Command sequence that passed through the first gate: `uv run python .\scripts\target_tracker_probe.py --execute --hover-thrust 0.265 --climb-thrust-delta 0.015 --climb-duration 2.5 --forward-pitch-rate -0.05 --pitch-pulse-duration 0.5`
