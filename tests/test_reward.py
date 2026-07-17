@@ -17,10 +17,12 @@ def data(gate_index=0, track_id=1, collision=None, active_gate=None):
     return value
 
 
-def observation(cx=0.2, cy=0.1, log_area=0.0, detected=True):
+def observation(cx=0.2, cy=0.1, log_area=0.0, detected=True, action=None):
     value = np.zeros(38, dtype=np.float32)
     value[0] = float(detected)
     value[1:4] = (cx, cy, log_area)
+    if action is not None:
+        value[-4:] = action
     return value
 
 
@@ -75,6 +77,35 @@ class RewardCalculatorTests(unittest.TestCase):
         rewards.reset(data(active_gate={"valid": False}), observation(cx=0.4))
         result = rewards.compute(data(active_gate={"valid": False}), observation(cx=0.2))
         self.assertGreater(result.components["visual_progress"], 0.0)
+
+    def test_unchanged_actions_have_no_slew_penalty(self):
+        rewards = RewardCalculator()
+        command = [0.2, -0.1, 0.3, 0.4]
+        rewards.reset(data(), observation(action=command))
+        result = rewards.compute(data(), observation(action=command))
+        self.assertEqual(result.components["rate_slew"], 0.0)
+        self.assertEqual(result.components["thrust_slew"], 0.0)
+
+    def test_all_action_changes_receive_bounded_slew_penalties(self):
+        rewards = RewardCalculator()
+        rewards.reset(data(), observation(action=[-1.0, -1.0, -1.0, -1.0]))
+        result = rewards.compute(data(), observation(action=[1.0, 1.0, 1.0, 1.0]))
+        self.assertAlmostEqual(result.components["rate_slew"], -0.24)
+        self.assertAlmostEqual(result.components["thrust_slew"], -0.02)
+        self.assertAlmostEqual(
+            result.components["step"]
+            + result.components["rate_slew"]
+            + result.components["thrust_slew"],
+            -0.27,
+        )
+
+    def test_slew_state_is_cleared_on_episode_reset(self):
+        rewards = RewardCalculator()
+        rewards.reset(data(), observation(action=[1.0, 0.0, 0.0, 0.0]))
+        rewards.compute(data(), observation(action=[-1.0, 0.0, 0.0, 0.0]))
+        rewards.reset(data(), observation(action=[0.0, 0.0, 0.0, 0.0]))
+        result = rewards.compute(data(), observation(action=[0.0, 0.0, 0.0, 0.0]))
+        self.assertEqual(result.components["rate_slew"], 0.0)
 
 
 if __name__ == "__main__":

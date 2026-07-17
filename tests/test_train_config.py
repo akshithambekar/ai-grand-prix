@@ -19,6 +19,10 @@ class TrainingConfigurationTests(unittest.TestCase):
             "AIGP_TOTAL_TIMESTEPS": "250000",
             "AIGP_SEED": "7",
             "AIGP_RESUME": "model.zip",
+            "AIGP_N_STEPS": "1024",
+            "AIGP_BATCH_SIZE": "128",
+            "AIGP_N_EPOCHS": "5",
+            "AIGP_CHECKPOINT_FREQ": "10000",
         }
         with patch.dict(os.environ, values, clear=False):
             args = parse_args([])
@@ -30,6 +34,10 @@ class TrainingConfigurationTests(unittest.TestCase):
         self.assertEqual(args.total_timesteps, 250000)
         self.assertEqual(args.seed, 7)
         self.assertEqual(str(args.resume), "model.zip")
+        self.assertEqual(args.n_steps, 1024)
+        self.assertEqual(args.batch_size, 128)
+        self.assertEqual(args.n_epochs, 5)
+        self.assertEqual(args.checkpoint_freq, 10000)
 
     def test_cli_overrides_environment_and_can_disable_execution(self):
         with patch.dict(os.environ, {"AIGP_EXECUTE": "true", "AIGP_TARGET_GATES": "3"}):

@@ -14,8 +14,12 @@ class RewardResult:
 class RewardCalculator:
     """Reward gate passage while guarding temporal terms across target changes."""
 
-    def __init__(self, gamma=0.995):
+    def __init__(self, gamma=0.995, rate_slew_weight=0.02, thrust_slew_weight=0.005):
         self.gamma = gamma
+        self.rate_slew_weight = float(rate_slew_weight)
+        self.thrust_slew_weight = float(thrust_slew_weight)
+        if self.rate_slew_weight < 0.0 or self.thrust_slew_weight < 0.0:
+            raise ValueError("action-slew reward weights must be non-negative")
         self.reset()
 
     def reset(self, data=None, observation=None):
@@ -28,11 +32,20 @@ class RewardCalculator:
         self._previous_potential = None
         self._previous_physical_gate_id = None
         self._previous_distance_m = None
+        self._previous_action = self._action(observation)
         if observation is not None:
             self._set_potential_state(data, observation)
 
     def compute(self, data, observation, termination_reason=None) -> RewardResult:
         components = {"step": -0.01}
+        current_action = self._action(observation)
+        action_delta = current_action - self._previous_action
+        components["rate_slew"] = -self.rate_slew_weight * float(
+            np.dot(action_delta[:3], action_delta[:3])
+        )
+        components["thrust_slew"] = -self.thrust_slew_weight * float(
+            action_delta[3] * action_delta[3]
+        )
         status = self._mapping(data.get("race_status"))
         gate = self._mapping(data.get("gate"))
         gate_index = status.get("active_gate_index")
@@ -97,6 +110,7 @@ class RewardCalculator:
         self._previous_potential = potential
         self._previous_physical_gate_id = physical_gate_id if physical_valid else None
         self._previous_distance_m = distance
+        self._previous_action = current_action
         return RewardResult(
             total=float(sum(components.values())),
             components=components,
@@ -121,6 +135,15 @@ class RewardCalculator:
         if error < 0.4:
             potential += 0.15 * log_area
         return potential
+
+    @staticmethod
+    def _action(observation):
+        if observation is None:
+            return np.zeros(4, dtype=np.float32)
+        action = np.asarray(observation[-4:], dtype=np.float32)
+        if action.shape != (4,) or not np.isfinite(action).all():
+            return np.zeros(4, dtype=np.float32)
+        return np.clip(action, -1.0, 1.0)
 
     @staticmethod
     def _mapping(value):
