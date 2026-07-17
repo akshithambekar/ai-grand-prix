@@ -12,9 +12,9 @@ dependencies = [
     "opencv-python",
     "pymavlink",
     "python-dotenv",
+    "rich",
     "stable-baselines3",
     "tensorboard",
-    "tqdm",
 ]
 
 [tool.uv]

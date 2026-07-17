@@ -14,12 +14,26 @@ class RewardResult:
 class RewardCalculator:
     """Reward gate passage while guarding temporal terms across target changes."""
 
-    def __init__(self, gamma=0.995, rate_slew_weight=0.02, thrust_slew_weight=0.005):
+    def __init__(
+        self,
+        gamma=0.995,
+        rate_slew_weight=0.02,
+        thrust_slew_weight=0.005,
+        alignment_weight=0.20,
+        alignment_progress_weight=0.25,
+    ):
         self.gamma = gamma
         self.rate_slew_weight = float(rate_slew_weight)
         self.thrust_slew_weight = float(thrust_slew_weight)
-        if self.rate_slew_weight < 0.0 or self.thrust_slew_weight < 0.0:
-            raise ValueError("action-slew reward weights must be non-negative")
+        self.alignment_weight = float(alignment_weight)
+        self.alignment_progress_weight = float(alignment_progress_weight)
+        if min(
+            self.rate_slew_weight,
+            self.thrust_slew_weight,
+            self.alignment_weight,
+            self.alignment_progress_weight,
+        ) < 0.0:
+            raise ValueError("reward weights must be non-negative")
         self.reset()
 
     def reset(self, data=None, observation=None):
@@ -32,7 +46,9 @@ class RewardCalculator:
         self._previous_potential = None
         self._previous_physical_gate_id = None
         self._previous_distance_m = None
+        self._previous_alignment_error = None
         self._previous_action = self._action(observation)
+        self._reference_down_m = self._vehicle_down(data)
         if observation is not None:
             self._set_potential_state(data, observation)
 
@@ -67,16 +83,49 @@ class RewardCalculator:
             and gate_index == self._previous_gate_index
         )
         if same_physical_target:
-            components["position_progress"] = float(np.clip(
+            raw_progress = float(np.clip(
                 self._previous_distance_m - distance, -0.5, 0.5
             ))
-            half_width = max(self._finite(active_gate.get("width_m")) or 0.0, 0.1) / 2.0
-            half_height = max(self._finite(active_gate.get("height_m")) or 0.0, 0.1) / 2.0
-            lateral = abs(self._finite(active_gate.get("lateral_m")) or 0.0) / half_width
-            vertical = abs(self._finite(active_gate.get("vertical_m")) or 0.0) / half_height
-            components["gate_alignment"] = -0.05 * float(np.clip(
-                math.hypot(lateral, vertical), 0.0, 2.0
-            ))
+            alignment_error = self._physical_alignment_error(active_gate)
+            if alignment_error is not None:
+                # Approaching quickly only pays when the vehicle is lined up with the
+                # opening. Moving away remains fully negative at every alignment.
+                alignment_quality = math.exp(-3.0 * alignment_error * alignment_error)
+                components["position_progress"] = (
+                    raw_progress * alignment_quality if raw_progress > 0.0 else raw_progress
+                )
+                components["gate_alignment"] = -self.alignment_weight * float(
+                    np.clip(alignment_error, 0.0, 2.0)
+                )
+                if self._previous_alignment_error is not None:
+                    components["alignment_progress"] = self.alignment_progress_weight * float(
+                        np.clip(self._previous_alignment_error - alignment_error, -0.5, 0.5)
+                    )
+            else:
+                components["position_progress"] = raw_progress
+
+        vehicle = self._mapping(data.get("vehicle_state"))
+        if vehicle.get("valid"):
+            velocity = self._vector(vehicle.get("velocity_ned"), 3)
+            euler = self._vector(vehicle.get("euler"), 3)
+            position = self._vector(vehicle.get("position_ned"), 3)
+            if velocity is not None:
+                # LOCAL_NED uses positive-down velocity. Only unsafe descent is
+                # penalized; horizontal/total speed never appears in the reward.
+                descent_rate = max(0.0, velocity[2] - 0.25)
+                components["descent_stability"] = -0.05 * float(
+                    np.clip(descent_rate, 0.0, 3.0)
+                )
+            if euler is not None:
+                attitude_error = (euler[0] / 0.5) ** 2 + (euler[1] / 0.5) ** 2
+                components["attitude_stability"] = -0.05 * float(
+                    np.clip(attitude_error, 0.0, 2.0)
+                )
+            if position is not None and self._reference_down_m is not None:
+                altitude_loss = max(0.0, position[2] - self._reference_down_m - 0.25)
+                components["altitude_stability"] = -0.10 * float(
+                    np.clip(altitude_loss / 2.0, 0.0, 1.0)
+                )
 
         detected = bool(observation[0] > 0.5)
         track_id = gate.get("track_id")
@@ -104,12 +153,21 @@ class RewardCalculator:
 
         if termination_reason == "course_complete":
             components["course_complete"] = 50.0
+        elif termination_reason in {
+            "inverted", "tumbling", "position_divergence", "out_of_bounds", "stuck",
+        }:
+            components["terminal_failure"] = -20.0
+        elif termination_reason in {"gate_timeout", "episode_timeout", "gate_lost"}:
+            components["terminal_failure"] = -10.0
 
         self._previous_gate_index = gate_index
         self._previous_track_id = track_id if detected else None
         self._previous_potential = potential
         self._previous_physical_gate_id = physical_gate_id if physical_valid else None
         self._previous_distance_m = distance
+        self._previous_alignment_error = (
+            self._physical_alignment_error(active_gate) if physical_valid else None
+        )
         self._previous_action = current_action
         return RewardResult(
             total=float(sum(components.values())),
@@ -121,6 +179,7 @@ class RewardCalculator:
         if active_gate.get("valid"):
             self._previous_physical_gate_id = active_gate.get("gate_id")
             self._previous_distance_m = self._finite(active_gate.get("distance_m"))
+            self._previous_alignment_error = self._physical_alignment_error(active_gate)
         gate = self._mapping(data.get("gate"))
         if observation[0] <= 0.5:
             return
@@ -144,6 +203,32 @@ class RewardCalculator:
         if action.shape != (4,) or not np.isfinite(action).all():
             return np.zeros(4, dtype=np.float32)
         return np.clip(action, -1.0, 1.0)
+
+    @classmethod
+    def _physical_alignment_error(cls, active_gate):
+        width = cls._finite(active_gate.get("width_m"))
+        height = cls._finite(active_gate.get("height_m"))
+        lateral = cls._finite(active_gate.get("lateral_m"))
+        vertical = cls._finite(active_gate.get("vertical_m"))
+        if None in (width, height, lateral, vertical) or width <= 0.0 or height <= 0.0:
+            return None
+        return math.hypot(abs(lateral) / max(width / 2.0, 0.1), abs(vertical) / max(height / 2.0, 0.1))
+
+    @classmethod
+    def _vehicle_down(cls, data):
+        vehicle = cls._mapping(data.get("vehicle_state"))
+        position = cls._vector(vehicle.get("position_ned"), 3) if vehicle.get("valid") else None
+        return position[2] if position is not None else None
+
+    @staticmethod
+    def _vector(value, size):
+        try:
+            vector = tuple(float(item) for item in value)
+        except (TypeError, ValueError):
+            return None
+        if len(vector) != size or not all(math.isfinite(item) for item in vector):
+            return None
+        return vector
 
     @staticmethod
     def _mapping(value):

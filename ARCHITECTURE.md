@@ -154,6 +154,12 @@ same simulator. Models, checkpoints, Monitor output, episode metrics, and Tensor
 are written under `artifacts/state_v2/`. Former 19-value policies are intentionally
 incompatible and are rejected before evaluation or resume.
 
+The training terminal uses a responsive Rich dashboard. It shows total, value, policy,
+entropy, KL, and clipping losses after each PPO update; current and accumulated reward
+components; rollout progress; simulator target state; episode totals; and reset reasons.
+Narrow or short terminals use a folded layout, while CSV and TensorBoard retain the complete
+history independently of terminal size.
+
 ## Verification sequence
 
 1. Run all unit tests and SB3 `check_env` against the fake-clock backend.

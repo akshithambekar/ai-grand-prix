@@ -55,16 +55,23 @@ uv run python scripts\random_action_probe.py --execute --episodes 2
 Run the first 512-step PPO smoke rollout:
 
 ```powershell
-uv run python scripts/train_ppo.py --execute --target-gates 1 --total-timesteps 100000
+uv run python scripts/train_ppo.py --execute --target-gates 1 --total-timesteps 512
 ```
 
 The MLP PPO policy explicitly uses `device="cpu"`, which is the Stable-Baselines3
 recommended backend for this policy architecture.
 
+Training displays a responsive terminal dashboard with PPO loss, value loss, policy loss,
+KL, current reward, and per-component reward totals. It automatically switches to a folded
+layout when the terminal is narrow. Resize the terminal at any time; Rich recalculates the
+layout without truncating fields. Loss values show `waiting` until the first rollout has
+completed and PPO performs its first optimization update. Use `--no-dashboard` for silent
+terminal operation; CSV, TensorBoard, and checkpoint output remain enabled.
+
 To keep training options in one place, copy `.env.example` to `.env` and edit its values.
 It supports execution, simulator/vision addresses and ports, target gates, total timesteps,
-seed, and resume checkpoint. Command-line arguments override `.env`; `--no-execute` can
-always suppress live training even if `AIGP_EXECUTE=true` is configured.
+seed, resume checkpoint, and dashboard settings. Command-line arguments override `.env`;
+`--no-execute` can always suppress live training even if `AIGP_EXECUTE=true` is configured.
 
 Evaluate a saved model for ten deterministic episodes after pausing training:
 

@@ -23,6 +23,8 @@ class TrainingConfigurationTests(unittest.TestCase):
             "AIGP_BATCH_SIZE": "128",
             "AIGP_N_EPOCHS": "5",
             "AIGP_CHECKPOINT_FREQ": "10000",
+            "AIGP_DASHBOARD": "false",
+            "AIGP_DASHBOARD_REFRESH_HZ": "2.5",
         }
         with patch.dict(os.environ, values, clear=False):
             args = parse_args([])
@@ -38,12 +40,15 @@ class TrainingConfigurationTests(unittest.TestCase):
         self.assertEqual(args.batch_size, 128)
         self.assertEqual(args.n_epochs, 5)
         self.assertEqual(args.checkpoint_freq, 10000)
+        self.assertFalse(args.dashboard)
+        self.assertEqual(args.dashboard_refresh_hz, 2.5)
 
     def test_cli_overrides_environment_and_can_disable_execution(self):
         with patch.dict(os.environ, {"AIGP_EXECUTE": "true", "AIGP_TARGET_GATES": "3"}):
-            args = parse_args(["--no-execute", "--target-gates", "0"])
+            args = parse_args(["--no-execute", "--target-gates", "0", "--no-dashboard"])
         self.assertFalse(args.execute)
         self.assertEqual(args.target_gates, 0)
+        self.assertFalse(args.dashboard)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,15 @@ def data(gate_index=0, track_id=1, collision=None, active_gate=None):
     return value
 
 
+def physical_state(*, down=0.0, down_velocity=0.0, roll=0.0, pitch=0.0):
+    return {
+        "valid": True,
+        "position_ned": (0.0, 0.0, down),
+        "velocity_ned": (0.0, 0.0, down_velocity),
+        "euler": (roll, pitch, 0.0),
+    }
+
+
 def observation(cx=0.2, cy=0.1, log_area=0.0, detected=True, action=None):
     value = np.zeros(38, dtype=np.float32)
     value[0] = float(detected)
@@ -68,9 +77,81 @@ class RewardCalculatorTests(unittest.TestCase):
         rewards = RewardCalculator()
         rewards.reset(data(active_gate=previous), observation(cx=0.4))
         result = rewards.compute(data(active_gate=current), observation(cx=0.2))
-        self.assertAlmostEqual(result.components["position_progress"], 0.3)
+        self.assertGreater(result.components["position_progress"], 0.0)
+        self.assertLess(result.components["position_progress"], 0.3)
         self.assertIn("gate_alignment", result.components)
         self.assertNotIn("visual_progress", result.components)
+
+    def test_forward_progress_is_suppressed_while_misaligned(self):
+        aligned = {
+            "valid": True, "gate_id": 0, "distance_m": 10.0,
+            "lateral_m": 0.0, "vertical_m": 0.0, "width_m": 2.0, "height_m": 2.0,
+        }
+        misaligned = dict(aligned, lateral_m=1.0)
+
+        aligned_rewards = RewardCalculator()
+        aligned_rewards.reset(data(active_gate=aligned), observation())
+        aligned_result = aligned_rewards.compute(
+            data(active_gate=dict(aligned, distance_m=9.8)), observation()
+        )
+
+        misaligned_rewards = RewardCalculator()
+        misaligned_rewards.reset(data(active_gate=misaligned), observation())
+        misaligned_result = misaligned_rewards.compute(
+            data(active_gate=dict(misaligned, distance_m=9.8)), observation()
+        )
+
+        self.assertGreater(aligned_result.components["position_progress"], 0.19)
+        self.assertLess(misaligned_result.components["position_progress"], 0.02)
+        self.assertEqual(misaligned_result.components["gate_alignment"], -0.2)
+
+    def test_improving_alignment_is_rewarded(self):
+        previous = {
+            "valid": True, "gate_id": 0, "distance_m": 10.0,
+            "lateral_m": 0.8, "vertical_m": 0.0, "width_m": 2.0, "height_m": 2.0,
+        }
+        current = dict(previous, lateral_m=0.4)
+        rewards = RewardCalculator()
+        rewards.reset(data(active_gate=previous), observation())
+        result = rewards.compute(data(active_gate=current), observation())
+        self.assertAlmostEqual(result.components["alignment_progress"], 0.1)
+        self.assertGreater(result.components["alignment_progress"], 0.0)
+
+    def test_descent_altitude_loss_and_tilt_are_penalized_without_speed_penalty(self):
+        value = data()
+        value["vehicle_state"] = physical_state()
+        rewards = RewardCalculator()
+        rewards.reset(value, observation())
+
+        moving = data()
+        moving["vehicle_state"] = physical_state(
+            down=1.25, down_velocity=1.25, roll=0.5, pitch=0.5,
+        )
+        result = rewards.compute(moving, observation())
+
+        self.assertAlmostEqual(result.components["descent_stability"], -0.05)
+        self.assertAlmostEqual(result.components["altitude_stability"], -0.05)
+        self.assertAlmostEqual(result.components["attitude_stability"], -0.1)
+        self.assertNotIn("misaligned_speed", result.components)
+        self.assertNotIn("speed", result.components)
+
+    def test_level_horizontal_speed_has_no_vehicle_stability_penalty(self):
+        value = data()
+        value["vehicle_state"] = physical_state()
+        rewards = RewardCalculator()
+        rewards.reset(value, observation())
+        value["vehicle_state"] = dict(physical_state(), velocity_ned=(15.0, -10.0, 0.0))
+        result = rewards.compute(value, observation())
+        self.assertEqual(result.components["descent_stability"], 0.0)
+        self.assertEqual(result.components["altitude_stability"], 0.0)
+        self.assertEqual(result.components["attitude_stability"], 0.0)
+
+    def test_terminal_failures_receive_explicit_penalties(self):
+        for reason, expected in (("stuck", -20.0), ("gate_timeout", -10.0)):
+            rewards = RewardCalculator()
+            rewards.reset(data(), observation())
+            result = rewards.compute(data(), observation(), reason)
+            self.assertEqual(result.components["terminal_failure"], expected)
 
     def test_invalid_physical_state_uses_visual_fallback(self):
         rewards = RewardCalculator()
