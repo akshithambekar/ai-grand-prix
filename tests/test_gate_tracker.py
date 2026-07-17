@@ -1,6 +1,6 @@
 import unittest
 
-from controls.vision_rx import FrameSequenceGuard, GateTracker
+from controls.vision_rx import FrameSequenceGuard, GATE_OUTER_WIDTH_M, GateTracker, VisionRX
 
 
 FRAME_SHAPE = (1080, 1920, 3)
@@ -123,6 +123,23 @@ class FrameSequenceGuardTests(unittest.TestCase):
 
         self.assertEqual(guard.accept(1, 9000), (True, True))
         self.assertEqual(guard.accept(2, 9000), (True, False))
+
+
+class VisionGeometryTests(unittest.TestCase):
+    def test_restored_gate_dimensions_override_assumption(self):
+        receiver = VisionRX.__new__(VisionRX)
+        receiver.data = {
+            "active_gate_state": {"valid": True, "width_m": 2.5, "height_m": 3.0}
+        }
+        self.assertEqual(receiver._active_gate_dimensions(), (2.5, 3.0, "track"))
+
+    def test_invalid_track_geometry_uses_documented_fallback(self):
+        receiver = VisionRX.__new__(VisionRX)
+        receiver.data = {"active_gate_state": {"valid": False}}
+        self.assertEqual(
+            receiver._active_gate_dimensions(),
+            (GATE_OUTER_WIDTH_M, GATE_OUTER_WIDTH_M, "assumed"),
+        )
 
 
 if __name__ == "__main__":

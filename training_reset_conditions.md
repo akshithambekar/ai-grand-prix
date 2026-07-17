@@ -4,18 +4,19 @@ Automated episode-termination conditions for training, plus what to measure per 
 
 ## Telemetry plumbing: complete
 
-`mavlink_rx.py` now publishes heartbeat/armed state, HIGHRES_IMU, race status, and collision snapshots into `shared_data`. Collision snapshots include a monotonically increasing sequence for deduplication. Vision publishes via `self.data["gate"]`.
+`mavlink_rx.py` publishes heartbeat/armed state, ATTITUDE, LOCAL_POSITION_NED, ODOMETRY,
+HIGHRES_IMU, track geometry, race status, actuator output, and collision snapshots into
+`shared_data`. `controls/state.py` derives canonical `vehicle_state` and body-relative
+`active_gate_state` snapshots with freshness and validity metadata.
 
 The reset/countdown lifecycle is implemented in `controls/episode_manager.py` and wired into `controls/main.py`.
 
-## Constraint: what is actually observable
+## Restored state telemetry
 
-ATTITUDE, LOCAL_POSITION_NED and ODOMETRY are all disabled in the current sim config.
-There is no position, no velocity, and no attitude on the wire.
-
-Everything below has to be built from HIGHRES_IMU, COLLISION, race status, and vision.
-That rules out the obvious triggers like "altitude below floor" or "strayed more than X meters off track".
-Only what is observable is listed here.
+Simulator v1.0.3385 restores attitude, local NED position/velocity, and odometry. Track
+geometry is consumed when every gate record is finite and has valid dimensions; otherwise
+the runtime explicitly enters vision-fallback mode. Odometry is accepted as canonical only
+in the local NED frame, with local-position and attitude messages used as fallbacks.
 
 ## Reset triggers, roughly in order of value
 
@@ -42,19 +43,19 @@ Clipping a gate rail is a near miss, not a failure, and it is exactly the behavi
 Reset only on `threat_level == 2`, and treat level 1 as a logged penalty.
 Revisit once it is known whether the race rules actually disqualify a gate touch.
 
-### Tumbling
+### Tumbling — implemented
 
 Gyro magnitude from HIGHRES_IMU above a threshold sustained over a window means unrecoverable spin.
 The drone will never see a gate again, so every frame after that point is wasted rollout.
 
-### Inverted
+### Inverted — implemented
 
 When accel magnitude is near 1g the drone is quasi-static and the reading is mostly gravity, so the gravity vector gives tilt directly.
 Sustained tilt past roughly 90 degrees is a reset.
 This is unreliable during aggressive maneuvers, which is why it needs the quasi-static gate.
 It catches the slow flip-and-drift that tumbling detection misses.
 
-### Range divergence
+### Position divergence — implemented
 
 `range_m` is published per frame.
 If it increases monotonically over a rolling window while a gate is detected, the drone is flying away from its target.
@@ -67,7 +68,7 @@ That is much earlier, and with cleaner credit assignment.
 If the gate centroid sits within a few percent of the frame border for K consecutive frames, the gate is on its way out of the FOV.
 Fires one beat before "no gates visible" does.
 
-### Stuck
+### Stuck — implemented
 
 Accel reading close to pure gravity plus `vision_velocity` near zero for several seconds means the drone is wedged or hovering.
 Distinct from the time budget in that it fires faster.
@@ -131,7 +132,7 @@ Target continuity, episode metrics, direct-action Gymnasium wrapping, curriculum
 reward calculation, and SB3 training/evaluation entry points are implemented. The live Gym
 uses this `EpisodeManager` directly, including the four-second post-reset command embargo.
 
-Tumbling, inversion, range divergence, and stuck-state triggers remain deferred until their
-thresholds are validated against official-simulator motion logs. Existing gate timeout,
-collision, gate-loss, vision-stall, episode-timeout, and course-completion conditions provide
-the initial training boundary.
+Tumbling, inversion, true gate-distance divergence, local-position bounds, and stuck-state
+triggers are implemented with configurable thresholds and sustained hold times. Existing gate
+timeout, collision, gate-loss, vision-stall, episode-timeout, and course-completion conditions
+remain independent safeguards.

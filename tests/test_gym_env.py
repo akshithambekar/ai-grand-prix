@@ -109,7 +109,7 @@ class AIGPEnvTests(unittest.TestCase):
 
         self.assertGreaterEqual(clock.now, 4.0)
         self.assertEqual(controller.commands, [])
-        self.assertEqual(observation.shape, (19,))
+        self.assertEqual(observation.shape, (38,))
 
     def test_step_holds_one_action_for_five_commands(self):
         env, _, clock, controller = self.make_env()

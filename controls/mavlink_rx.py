@@ -1,8 +1,11 @@
 import struct
 import time
 import threading
+import math
 
 from pymavlink import mavutil
+
+from controls.state import derive_vehicle_state
 
 ENCAPSULATED_RACE_STATUS_MSG_ID = 1
 ENCAPSULATED_TRACK_INFO_MSG_ID  = 2
@@ -69,36 +72,18 @@ class MAVLinkRX:
 
             # --------------------------------------------------------------------------------------
             # ATTITUDE
-            #
-            #
-            # PLEASE NOTE:
-            # As per the configuration of the latest version of the simulator, Attitude telemetry has been disabled.
-            #
-            #
             # --------------------------------------------------------------------------------------
             elif msg_type == "ATTITUDE":
                 self.on_attitude(msg)
 
             # --------------------------------------------------------------------------------------
             # LOCAL_POSITION_NED
-            #
-            #
-            # PLEASE NOTE:
-            # As per the configuration of the latest version of the simulator, Local Position NED telemetry has been disabled.
-            #
-            #
             # --------------------------------------------------------------------------------------
             elif msg_type == "LOCAL_POSITION_NED":
                 self.on_local_position_ned(msg)
 
             # --------------------------------------------------------------------------------------
             # ODOMETRY
-            #
-            #
-            # PLEASE NOTE:
-            # As per the configuration of the latest version of the simulator, Odometry telemetry has been disabled.
-            #
-            #
             # --------------------------------------------------------------------------------------
             elif msg_type == "ODOMETRY":
                 self.on_odometry(msg)
@@ -148,50 +133,41 @@ class MAVLinkRX:
         response_time = msg.tc1
 
     def on_attitude(self, msg):
-        #
-        #
-        # PLEASE NOTE:
-        # As per the configuration of the latest version of the simulator, Attitude telemetry has been disabled.
-        #
-        #
-        roll = msg.roll
-        pitch = msg.pitch
-        yaw = msg.yaw
-        roll_speed = msg.rollspeed
-        pitch_speed = msg.pitchspeed
-        yaw_speed = msg.yawspeed
-        time_boot_ms = msg.time_boot_ms
+        self.data["attitude"] = {
+            "time_boot_ms": msg.time_boot_ms,
+            "euler": (msg.roll, msg.pitch, msg.yaw),
+            "body_rates": (msg.rollspeed, msg.pitchspeed, msg.yawspeed),
+            "received_at_s": time.monotonic(),
+        }
+        derive_vehicle_state(self.data)
 
     def on_local_position_ned(self, msg):
-        #
-        #
-        # PLEASE NOTE:
-        # As per the configuration of the latest version of the simulator, Local Position NED telemetry has been disabled.
-        #
-        #
-        pos_x = msg.x
-        pos_y = msg.y
-        pos_z = msg.z
-        vel_x = msg.vx
-        vel_y = msg.vy
-        vel_z = msg.vz
-        time_boot_ms = msg.time_boot_ms
+        self.data["local_position_ned"] = {
+            "time_boot_ms": msg.time_boot_ms,
+            "position_ned": (msg.x, msg.y, msg.z),
+            "velocity_ned": (msg.vx, msg.vy, msg.vz),
+            "received_at_s": time.monotonic(),
+        }
+        derive_vehicle_state(self.data)
 
     def on_odometry(self, msg):
-        #
-        #
-        # PLEASE NOTE:
-        # As per the configuration of the latest version of the simulator, Odometry telemetry has been disabled.
-        #
-        #
-        pos_x, pos_y, pos_z = msg.x, msg.y, msg.z
-        qx, qy, qz, qw = msg.q[1], msg.q[2], msg.q[3], msg.q[0]
-        vel_x, vel_y, vel_z = msg.vx, msg.vy, msg.vz
-        roll_speed = msg.rollspeed
-        pitch_speed = msg.pitchspeed
-        yaw_speed = msg.yawspeed
-        time_boot_us = msg.time_usec
-        reset_count = msg.reset_counter
+        self.data["odometry"] = {
+            "time_usec": msg.time_usec,
+            "frame_id": msg.frame_id,
+            "child_frame_id": msg.child_frame_id,
+            "position_ned": (msg.x, msg.y, msg.z),
+            "quaternion_wxyz": tuple(msg.q),
+            "velocity_ned": (msg.vx, msg.vy, msg.vz),
+            "velocity_frame_id": msg.child_frame_id,
+            "body_rates": (msg.rollspeed, msg.pitchspeed, msg.yawspeed),
+            "pose_covariance": tuple(getattr(msg, "pose_covariance", ())),
+            "velocity_covariance": tuple(getattr(msg, "velocity_covariance", ())),
+            "reset_counter": msg.reset_counter,
+            "estimator_type": getattr(msg, "estimator_type", None),
+            "quality": getattr(msg, "quality", None),
+            "received_at_s": time.monotonic(),
+        }
+        derive_vehicle_state(self.data)
 
     def on_highres_imu(self, msg):
         self.data["imu"] = {
@@ -204,6 +180,7 @@ class MAVLinkRX:
             "zgyro": msg.zgyro,
             "received_at_s": time.monotonic(),
         }
+        derive_vehicle_state(self.data)
 
     def on_encapsulated_data(self, msg):
         if msg:
@@ -233,6 +210,7 @@ class MAVLinkRX:
             "last_gate_race_time": last_gate_race_time,
             "received_at_s": time.monotonic(),
         }
+        derive_vehicle_state(self.data)
 
     def on_track_data_packet(self, msg):
         raw_payload = bytes(msg.data)
@@ -243,26 +221,29 @@ class MAVLinkRX:
         if transfer_id not in self.expected_num_track_chunks:
             return
         raw_payload = raw_payload[3:]
+        if msg.seqnr < 0 or msg.seqnr >= self.expected_num_track_chunks[transfer_id]:
+            return
         self.track_chunks[transfer_id][msg.seqnr] = raw_payload
         if len(self.track_chunks[transfer_id]) == self.expected_num_track_chunks[transfer_id]:
-            full_payload = bytes()
-            for i in range(len(self.track_chunks[transfer_id])):
-                full_payload = full_payload + self.track_chunks[transfer_id][i]
+            full_payload = b"".join(
+                self.track_chunks[transfer_id][i]
+                for i in range(self.expected_num_track_chunks[transfer_id])
+            )
             del self.track_chunks[transfer_id]
             del self.expected_num_track_chunks[transfer_id]
             self.on_track_data(full_payload)
 
     def on_track_data(self, payload):
-        #
-        #
-        # PLEASE NOTE:
-        # As per the configuration of the latest version of the simulator, gate positions, orientations and dimensions are no longer published in telemetry and will be nulled.
-        #
-        #
         # header:
         #   num_gates - track gate count
+        record_format = "<Hfffffffff"
+        record_size = struct.calcsize(record_format)
+        if len(payload) < 2:
+            return
         num_gates, = struct.unpack_from("<H", payload)
         payload = payload[2:]
+        gates = {}
+        rejected = 0
         for i in range(num_gates):
             # Gate Info
             #   gate_id - range is 0 - num_gates
@@ -270,16 +251,45 @@ class MAVLinkRX:
             #   orientation_ned_w, orientation_ned_x, orientation_ned_y, orientation_ned_z - Orientation of gate in NED coordinates
             #   width - gate width in metres
             #   height - gate height in metres
-            gate_id, position_ned_x, position_ned_y, position_ned_z, orientation_ned_w, orientation_ned_x, orientation_ned_y, orientation_ned_z, width, height = struct.unpack_from(
-                "<Hfffffffff", payload)
-            payload = payload[38:]
+            if len(payload) < record_size:
+                rejected += num_gates - i
+                break
+            values = struct.unpack_from(record_format, payload)
+            payload = payload[record_size:]
+            gate_id, position_ned_x, position_ned_y, position_ned_z, orientation_ned_w, orientation_ned_x, orientation_ned_y, orientation_ned_z, width, height = values
+            numeric = values[1:]
+            q_norm = math.sqrt(sum(value * value for value in values[4:8]))
+            if not all(math.isfinite(value) for value in numeric) or width <= 0 or height <= 0 or q_norm < 1e-6:
+                rejected += 1
+                continue
+            gates[int(gate_id)] = {
+                "gate_id": int(gate_id),
+                "position_ned": (position_ned_x, position_ned_y, position_ned_z),
+                "quaternion_wxyz": (
+                    orientation_ned_w / q_norm,
+                    orientation_ned_x / q_norm,
+                    orientation_ned_y / q_norm,
+                    orientation_ned_z / q_norm,
+                ),
+                "width_m": width,
+                "height_m": height,
+            }
+        self.data["track"] = {
+            "num_gates": int(num_gates),
+            "gates": gates,
+            "rejected_gates": rejected,
+            "track_geometry_valid": bool(num_gates and len(gates) == num_gates and rejected == 0),
+            "received_at_s": time.monotonic(),
+        }
+        derive_vehicle_state(self.data)
 
     def on_actuator_output_status(self, msg):
-        time_boot_us = msg.time_usec
-        motor_front_left = msg.actuator[0]
-        motor_front_right = msg.actuator[1]
-        motor_back_left = msg.actuator[2]
-        motor_back_right = msg.actuator[3]
+        self.data["actuator_output"] = {
+            "time_usec": msg.time_usec,
+            "motors": tuple(msg.actuator[:4]),
+            "active": getattr(msg, "active", None),
+            "received_at_s": time.monotonic(),
+        }
 
     def on_collision(self, msg):
         # Collision IDs

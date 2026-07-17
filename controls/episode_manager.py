@@ -1,5 +1,6 @@
 """Episode lifecycle and reset conditions for simulator training."""
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Mapping, Optional
@@ -24,6 +25,18 @@ class EpisodeConfig:
     arm_retry_s: float = 1.0
     post_reset_command_delay_s: float = 4.0
     target_gate_count: Optional[int] = None
+    inversion_angle_rad: float = math.radians(100.0)
+    inversion_hold_s: float = 0.5
+    tumble_rate_rad_s: float = 8.0
+    tumble_hold_s: float = 0.5
+    divergence_distance_m: float = 5.0
+    divergence_hold_s: float = 1.5
+    horizontal_bound_m: float = 100.0
+    vertical_bound_m: float = 30.0
+    out_of_bounds_hold_s: float = 0.5
+    stuck_speed_m_s: float = 0.2
+    stuck_hold_s: float = 3.0
+    stuck_grace_s: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -77,6 +90,14 @@ class EpisodeManager:
         self._current_gate = None
         self._no_detection_since = None
         self._collision_sequence = 0
+        self._reference_odometry_reset_counter = None
+        self._episode_start_position = None
+        self._minimum_gate_distance = None
+        self._inversion_since = None
+        self._tumble_since = None
+        self._divergence_since = None
+        self._out_of_bounds_since = None
+        self._stuck_since = None
 
     @property
     def command_allowed(self):
@@ -98,6 +119,8 @@ class EpisodeManager:
         self._current_gate = None
         self._no_detection_since = None
         self._collision_sequence = self._collision_seq()
+        self._reference_odometry_reset_counter = self._odometry_reset_counter()
+        self._clear_state_safety()
         self.phase = EpisodePhase.RESET_REQUESTED
         self.send_reset()
         return self._event(
@@ -163,6 +186,8 @@ class EpisodeManager:
             self._gate_started_at = now
             self._gate_changed_at = now
             self._no_detection_since = None
+            self._minimum_gate_distance = None
+            self._divergence_since = None
 
         reason = self._termination_reason(now)
         if reason is None:
@@ -214,6 +239,10 @@ class EpisodeManager:
                 return "severe_gate_collision"
             self._collision_sequence = collision.get("sequence", self._collision_sequence)
 
+        state_reason = self._state_termination_reason(now)
+        if state_reason is not None:
+            return state_reason
+
         gate = self.data.get("gate") or {}
         frame_id = gate.get("frame_id")
         if frame_id is not None and frame_id != self._last_frame_id:
@@ -250,6 +279,11 @@ class EpisodeManager:
         self._current_gate = status.get("active_gate_index", 0)
         self._collision_sequence = self._collision_seq()
         self._no_detection_since = None
+        state = self.data.get("vehicle_state") or {}
+        self._episode_start_position = state.get("position_ned") if state.get("valid") else None
+        active_gate = self.data.get("active_gate_state") or {}
+        self._minimum_gate_distance = active_gate.get("distance_m") if active_gate.get("valid") else None
+        self._clear_state_safety(keep_start=True)
 
     def _has_fresh_frame(self):
         gate = self.data.get("gate") or {}
@@ -264,6 +298,13 @@ class EpisodeManager:
         return start_ms < 0 or timestamp_s is None or timestamp_s * 1000 >= start_ms
 
     def _is_new_reset_epoch(self, status):
+        reset_counter = self._odometry_reset_counter()
+        if (
+            reset_counter is not None
+            and self._reference_odometry_reset_counter is not None
+            and reset_counter != self._reference_odometry_reset_counter
+        ):
+            return True
         start_ms = status.get("race_start_boot_time_ms", -1)
         sim_ms = status.get("sim_boot_time_ms", -1)
         if self._reference_sim_ms is not None and sim_ms < self._reference_sim_ms:
@@ -296,6 +337,85 @@ class EpisodeManager:
     def _collision_seq(self):
         collision = self.data.get("collision") or {}
         return collision.get("sequence", 0)
+
+    def _odometry_reset_counter(self):
+        odometry = self.data.get("odometry") or {}
+        return odometry.get("reset_counter")
+
+    def _state_termination_reason(self, now):
+        state = self.data.get("vehicle_state") or {}
+        if not state.get("valid"):
+            self._clear_state_safety(keep_start=True)
+            return None
+
+        euler = state.get("euler") or ()
+        rates = state.get("body_rates") or ()
+        velocity = state.get("velocity_ned") or ()
+        position = state.get("position_ned") or ()
+        if not all(len(value) == 3 for value in (euler, rates, velocity, position)):
+            return None
+
+        inverted = abs(float(euler[0])) >= self.config.inversion_angle_rad or abs(float(euler[1])) >= self.config.inversion_angle_rad
+        self._inversion_since = self._hold_start(self._inversion_since, inverted, now)
+        if self._held(self._inversion_since, now, self.config.inversion_hold_s):
+            return "inverted"
+
+        tumble = math.sqrt(sum(float(value) ** 2 for value in rates)) >= self.config.tumble_rate_rad_s
+        self._tumble_since = self._hold_start(self._tumble_since, tumble, now)
+        if self._held(self._tumble_since, now, self.config.tumble_hold_s):
+            return "tumbling"
+
+        speed = math.sqrt(sum(float(value) ** 2 for value in velocity))
+        stuck = (
+            self._episode_started_at is not None
+            and now - self._episode_started_at >= self.config.stuck_grace_s
+            and speed <= self.config.stuck_speed_m_s
+        )
+        self._stuck_since = self._hold_start(self._stuck_since, stuck, now)
+        if self._held(self._stuck_since, now, self.config.stuck_hold_s):
+            return "stuck"
+
+        if self._episode_start_position is not None and len(self._episode_start_position) == 3:
+            delta = tuple(float(position[i]) - float(self._episode_start_position[i]) for i in range(3))
+            out = math.hypot(delta[0], delta[1]) > self.config.horizontal_bound_m or abs(delta[2]) > self.config.vertical_bound_m
+            self._out_of_bounds_since = self._hold_start(self._out_of_bounds_since, out, now)
+            if self._held(self._out_of_bounds_since, now, self.config.out_of_bounds_hold_s):
+                return "out_of_bounds"
+
+        active_gate = self.data.get("active_gate_state") or {}
+        if active_gate.get("valid"):
+            distance = float(active_gate.get("distance_m"))
+            if self._minimum_gate_distance is None or distance < self._minimum_gate_distance:
+                self._minimum_gate_distance = distance
+                self._divergence_since = None
+            diverging = distance >= self._minimum_gate_distance + self.config.divergence_distance_m
+            self._divergence_since = self._hold_start(self._divergence_since, diverging, now)
+            if self._held(self._divergence_since, now, self.config.divergence_hold_s):
+                return "position_divergence"
+        else:
+            self._minimum_gate_distance = None
+            self._divergence_since = None
+        return None
+
+    @staticmethod
+    def _hold_start(current, condition, now):
+        if not condition:
+            return None
+        return now if current is None else current
+
+    @staticmethod
+    def _held(started_at, now, duration):
+        return started_at is not None and now - started_at >= duration
+
+    def _clear_state_safety(self, keep_start=False):
+        if not keep_start:
+            self._episode_start_position = None
+            self._minimum_gate_distance = None
+        self._inversion_since = None
+        self._tumble_since = None
+        self._divergence_since = None
+        self._out_of_bounds_since = None
+        self._stuck_since = None
 
     def _armed(self):
         return bool(self.data.get("armed", False))

@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import os
 import sys
 from pathlib import Path
 
@@ -12,16 +13,23 @@ if str(REPO_ROOT) not in sys.path:
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
+from dotenv import load_dotenv
 
 from controls.episode_manager import EpisodeConfig
+from controls.model_compat import stamp_model_schema, validate_model_schema
 from controls.runtime import create_official_env
 
 
-ARTIFACTS = REPO_ROOT / "artifacts"
+ARTIFACTS = REPO_ROOT / "artifacts" / "state_v2"
+PPO_DEVICE = "cpu"
 EPISODE_FIELDS = [
     "episode_id", "episode_duration_s", "episode_steps", "gates_passed",
     "highest_gate_index", "reset_reason", "collision_count", "detection_rate",
     "mean_center_error", "control_rate_hz", "vision_rate_hz",
+    "vehicle_state_availability", "track_geometry_availability", "state_fallback_count",
+    "mean_speed_m_s", "max_speed_m_s", "max_attitude_rad", "max_body_rate_rad_s",
+    "gate_distance_change_m", "position_min_ned", "position_max_ned",
+    "mean_vision_range_error_m",
 ]
 
 
@@ -43,17 +51,54 @@ class EpisodeCSVCallback(BaseCallback):
         self._file.close()
 
 
-def parse_args():
+def _env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def _env_int(name, default):
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError as error:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from error
+
+
+def parse_args(argv=None):
+    load_dotenv(REPO_ROOT / ".env")
+    try:
+        execute = _env_bool("AIGP_EXECUTE", False)
+        sim_port = _env_int("AIGP_SIM_PORT", 14550)
+        vision_port = _env_int("AIGP_VISION_PORT", 5600)
+        target_gates = _env_int("AIGP_TARGET_GATES", 1)
+        total_timesteps = _env_int("AIGP_TOTAL_TIMESTEPS", 100_000)
+        seed = _env_int("AIGP_SEED", 0)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    resume = os.getenv("AIGP_RESUME", "").strip()
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--execute", action="store_true", help="enable live training")
-    parser.add_argument("--sim-ip", default="127.0.0.1")
-    parser.add_argument("--sim-port", type=int, default=14550)
-    parser.add_argument("--vision-port", type=int, default=5600)
-    parser.add_argument("--target-gates", type=int, default=1, help="0 means full course")
-    parser.add_argument("--total-timesteps", type=int, default=100_000)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--resume", type=Path)
-    return parser.parse_args()
+    parser.add_argument(
+        "--execute", action=argparse.BooleanOptionalAction, default=execute,
+        help="enable live training (env: AIGP_EXECUTE)",
+    )
+    parser.add_argument("--sim-ip", default=os.getenv("AIGP_SIM_IP", "127.0.0.1"))
+    parser.add_argument("--sim-port", type=int, default=sim_port)
+    parser.add_argument("--vision-port", type=int, default=vision_port)
+    parser.add_argument("--target-gates", type=int, default=target_gates, help="0 means full course")
+    parser.add_argument("--total-timesteps", type=int, default=total_timesteps)
+    parser.add_argument("--seed", type=int, default=seed)
+    parser.add_argument("--resume", type=Path, default=Path(resume) if resume else None)
+    return parser.parse_args(argv)
 
 
 def main():
@@ -62,6 +107,7 @@ def main():
         raise SystemExit("Add --execute to connect and train on the official simulator.")
     if args.target_gates < 0 or args.total_timesteps <= 0:
         raise SystemExit("target gates must be non-negative and timesteps must be positive")
+    print(f"PPO device: {PPO_DEVICE}", flush=True)
 
     for directory in ("models", "checkpoints", "tensorboard"):
         (ARTIFACTS / directory).mkdir(parents=True, exist_ok=True)
@@ -86,7 +132,8 @@ def main():
 
     try:
         if args.resume:
-            model = PPO.load(args.resume, env=monitored)
+            model = validate_model_schema(PPO.load(args.resume, device=PPO_DEVICE))
+            model.set_env(monitored)
         else:
             model = PPO(
                 "MlpPolicy",
@@ -103,7 +150,9 @@ def main():
                 tensorboard_log=str(ARTIFACTS / "tensorboard"),
                 seed=args.seed,
                 verbose=1,
+                device=PPO_DEVICE,
             )
+        stamp_model_schema(model)
         model.learn(total_timesteps=args.total_timesteps, callback=callbacks)
         output = ARTIFACTS / "models" / "ppo_aigp_final"
         model.save(output)

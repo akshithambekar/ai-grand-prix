@@ -7,7 +7,7 @@ import numpy as np
 
 from controls.controller import ActionMapper
 from controls.episode_manager import EpisodePhase
-from controls.observation import OBSERVATION_SIZE, ObservationEncoder
+from controls.observation import OBSERVATION_SCHEMA, OBSERVATION_SIZE, ObservationEncoder
 from controls.reward import RewardCalculator
 
 
@@ -16,6 +16,11 @@ TERMINATED_REASONS = {
     "curriculum_complete",
     "environment_collision",
     "severe_gate_collision",
+    "inverted",
+    "tumbling",
+    "position_divergence",
+    "out_of_bounds",
+    "stuck",
 }
 TRUNCATED_REASONS = {
     "gate_timeout",
@@ -194,6 +199,38 @@ class AIGPEnv(gym.Env):
             self._collision_count += 1
             self._last_collision_sequence = collision_sequence
 
+        state = self.data.get("vehicle_state") or {}
+        active_gate = self.data.get("active_gate_state") or {}
+        if state.get("valid"):
+            self._state_valid_steps += 1
+            velocity = state.get("velocity_ned") or (0.0, 0.0, 0.0)
+            speed = math.sqrt(sum(float(value) ** 2 for value in velocity))
+            self._speed_sum += speed
+            self._max_speed = max(self._max_speed, speed)
+            euler = state.get("euler") or (0.0, 0.0, 0.0)
+            rates = state.get("body_rates") or (0.0, 0.0, 0.0)
+            self._max_attitude_rad = max(self._max_attitude_rad, *(abs(float(value)) for value in euler))
+            self._max_body_rate_rad_s = max(
+                self._max_body_rate_rad_s,
+                math.sqrt(sum(float(value) ** 2 for value in rates)),
+            )
+            position = state.get("position_ned") or (0.0, 0.0, 0.0)
+            for axis in range(3):
+                self._position_min[axis] = min(self._position_min[axis], float(position[axis]))
+                self._position_max[axis] = max(self._position_max[axis], float(position[axis]))
+            if any(state.get(key) != "odometry" for key in ("position_source", "attitude_source", "rates_source")):
+                self._state_fallback_steps += 1
+        if active_gate.get("valid"):
+            self._track_valid_steps += 1
+            distance = float(active_gate.get("distance_m"))
+            if self._first_gate_distance is None:
+                self._first_gate_distance = distance
+            self._last_gate_distance = distance
+            vision_range = gate.get("range_m")
+            if vision_range is not None:
+                self._vision_range_error_sum += abs(float(vision_range) - distance)
+                self._vision_range_error_count += 1
+
     def _build_info(self, reason, reward_components, command_sends):
         gate = self.data.get("gate") or {}
         status = self.data.get("race_status") or {}
@@ -206,6 +243,11 @@ class AIGPEnv(gym.Env):
             "termination_reason": reason,
             "reward_components": dict(reward_components),
             "command_sends": command_sends,
+            "observation_schema": OBSERVATION_SCHEMA,
+            "vehicle_state_valid": bool((self.data.get("vehicle_state") or {}).get("valid")),
+            "track_geometry_valid": bool((self.data.get("active_gate_state") or {}).get("valid")),
+            "vehicle_state": dict(self.data.get("vehicle_state") or {}),
+            "active_gate_state": dict(self.data.get("active_gate_state") or {}),
         }
 
     def _terminal_metrics(self, event):
@@ -220,6 +262,24 @@ class AIGPEnv(gym.Env):
             "control_rate_hz": self._command_sends / duration,
             "vision_rate_hz": len(self._vision_frame_ids) / duration,
             "collision_count": self._collision_count,
+            "vehicle_state_availability": self._state_valid_steps / max(self._episode_steps, 1),
+            "track_geometry_availability": self._track_valid_steps / max(self._episode_steps, 1),
+            "state_fallback_count": self._state_fallback_steps,
+            "mean_speed_m_s": self._speed_sum / max(self._state_valid_steps, 1),
+            "max_speed_m_s": self._max_speed,
+            "max_attitude_rad": self._max_attitude_rad,
+            "max_body_rate_rad_s": self._max_body_rate_rad_s,
+            "gate_distance_change_m": (
+                self._first_gate_distance - self._last_gate_distance
+                if self._first_gate_distance is not None and self._last_gate_distance is not None
+                else None
+            ),
+            "position_min_ned": tuple(self._position_min) if self._state_valid_steps else None,
+            "position_max_ned": tuple(self._position_max) if self._state_valid_steps else None,
+            "mean_vision_range_error_m": (
+                self._vision_range_error_sum / self._vision_range_error_count
+                if self._vision_range_error_count else None
+            ),
             "reset_reason": event.reason if event is not None else None,
         }
 
@@ -234,3 +294,16 @@ class AIGPEnv(gym.Env):
         collision = self.data.get("collision") or {}
         self._last_collision_sequence = int(collision.get("sequence", 0) or 0)
         self._collision_count = 0
+        self._state_valid_steps = 0
+        self._track_valid_steps = 0
+        self._state_fallback_steps = 0
+        self._speed_sum = 0.0
+        self._max_speed = 0.0
+        self._max_attitude_rad = 0.0
+        self._max_body_rate_rad_s = 0.0
+        self._position_min = [math.inf, math.inf, math.inf]
+        self._position_max = [-math.inf, -math.inf, -math.inf]
+        self._first_gate_distance = None
+        self._last_gate_distance = None
+        self._vision_range_error_sum = 0.0
+        self._vision_range_error_count = 0

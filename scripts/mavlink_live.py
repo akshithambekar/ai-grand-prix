@@ -6,6 +6,7 @@ telemetry destination/port.
 """
 
 import argparse
+import math
 import struct
 import sys
 import time
@@ -14,7 +15,9 @@ from pymavlink import mavutil
 
 
 RACE_STATUS_DATA_TYPE = 1
+TRACK_DATA_TYPE = 2
 RACE_STATUS_FORMAT = "<BQqqIq"
+TRACK_GATE_FORMAT = "<Hfffffffff"
 DEFAULT_SIM_IP = "127.0.0.1"
 DEFAULT_SIM_PORT = 14550
 
@@ -29,6 +32,12 @@ class TelemetryState:
         self.race_status = None
         self.collision = None
         self.actuators = None
+        self.attitude = None
+        self.local_position = None
+        self.odometry = None
+        self.track = None
+        self.track_chunks = {}
+        self.expected_track_chunks = {}
 
     def update(self, msg):
         now = time.monotonic()
@@ -52,8 +61,32 @@ class TelemetryState:
                 "accel": (msg.xacc, msg.yacc, msg.zacc),
                 "gyro": (msg.xgyro, msg.ygyro, msg.zgyro),
             }
+        elif msg_type == "ATTITUDE":
+            self.attitude = {
+                "euler": (msg.roll, msg.pitch, msg.yaw),
+                "rates": (msg.rollspeed, msg.pitchspeed, msg.yawspeed),
+            }
+        elif msg_type == "LOCAL_POSITION_NED":
+            self.local_position = {
+                "position": (msg.x, msg.y, msg.z),
+                "velocity": (msg.vx, msg.vy, msg.vz),
+            }
+        elif msg_type == "ODOMETRY":
+            self.odometry = {
+                "position": (msg.x, msg.y, msg.z),
+                "velocity": (msg.vx, msg.vy, msg.vz),
+                "quaternion": tuple(msg.q),
+                "frame_id": msg.frame_id,
+                "child_frame_id": msg.child_frame_id,
+                "reset_counter": msg.reset_counter,
+                "quality": getattr(msg, "quality", None),
+            }
         elif msg_type == "ENCAPSULATED_DATA":
             self._update_encapsulated(msg)
+        elif msg_type == "DATA_TRANSMISSION_HANDSHAKE":
+            transfer_id = msg.width
+            self.track_chunks[transfer_id] = {}
+            self.expected_track_chunks[transfer_id] = msg.packets
         elif msg_type == "COLLISION":
             self.collision = {
                 "id": msg.id,
@@ -66,7 +99,13 @@ class TelemetryState:
 
     def _update_encapsulated(self, msg):
         payload = bytes(msg.data)
-        if not payload or payload[0] != RACE_STATUS_DATA_TYPE:
+        if not payload:
+            return
+
+        if payload[0] == TRACK_DATA_TYPE:
+            self._update_track_chunk(msg, payload)
+            return
+        if payload[0] != RACE_STATUS_DATA_TYPE:
             return
 
         required_size = struct.calcsize(RACE_STATUS_FORMAT)
@@ -87,6 +126,54 @@ class TelemetryState:
             "race_finish_time_ns": race_finish_time_ns,
             "active_gate_index": active_gate_index,
             "last_gate_race_time": last_gate_race_time,
+        }
+
+    def _update_track_chunk(self, msg, payload):
+        if len(payload) < 3:
+            return
+        transfer_id, = struct.unpack_from("<H", payload, 1)
+        if transfer_id not in self.expected_track_chunks:
+            return
+        self.track_chunks[transfer_id][msg.seqnr] = payload[3:]
+        expected = self.expected_track_chunks[transfer_id]
+        if len(self.track_chunks[transfer_id]) != expected:
+            return
+        chunks = self.track_chunks.pop(transfer_id)
+        self.expected_track_chunks.pop(transfer_id)
+        if any(index not in chunks for index in range(expected)):
+            return
+        self._parse_track(b"".join(chunks[index] for index in range(expected)))
+
+    def _parse_track(self, payload):
+        if len(payload) < 2:
+            return
+        count, = struct.unpack_from("<H", payload)
+        offset = 2
+        record_size = struct.calcsize(TRACK_GATE_FORMAT)
+        gates = {}
+        rejected = 0
+        for _ in range(count):
+            if offset + record_size > len(payload):
+                rejected += count - len(gates)
+                break
+            values = struct.unpack_from(TRACK_GATE_FORMAT, payload, offset)
+            offset += record_size
+            gate_id, *numeric = values
+            width, height = numeric[-2:]
+            if not all(math.isfinite(value) for value in numeric) or width <= 0 or height <= 0:
+                rejected += 1
+                continue
+            gates[int(gate_id)] = {
+                "position_ned": tuple(numeric[:3]),
+                "quaternion_wxyz": tuple(numeric[3:7]),
+                "width_m": width,
+                "height_m": height,
+            }
+        self.track = {
+            "count": count,
+            "gates": gates,
+            "rejected": rejected,
+            "valid": bool(count and len(gates) == count and rejected == 0),
         }
 
     def render(self, connection):
@@ -115,6 +202,8 @@ class TelemetryState:
 
         lines.extend(self._render_race())
         lines.extend(self._render_imu())
+        lines.extend(self._render_restored_state())
+        lines.extend(self._render_track())
 
         if self.actuators is None:
             lines.append("Actuators: waiting")
@@ -182,6 +271,49 @@ class TelemetryState:
         return [
             f"Accel m/s^2: x={ax:+8.3f}  y={ay:+8.3f}  z={az:+8.3f}",
             f"Gyro rad/s:  x={gx:+8.3f}  y={gy:+8.3f}  z={gz:+8.3f}",
+        ]
+
+    def _render_restored_state(self):
+        lines = []
+        if self.attitude is None:
+            lines.append("Attitude: waiting")
+        else:
+            roll, pitch, yaw = self.attitude["euler"]
+            rates = self.attitude["rates"]
+            lines.append(
+                f"Attitude rad: roll={roll:+.3f} pitch={pitch:+.3f} yaw={yaw:+.3f}  "
+                f"rates=({rates[0]:+.3f}, {rates[1]:+.3f}, {rates[2]:+.3f})"
+            )
+        if self.local_position is None:
+            lines.append("Local NED: waiting")
+        else:
+            pos, vel = self.local_position["position"], self.local_position["velocity"]
+            lines.append(f"Local NED m: pos={pos}  velocity m/s={vel}")
+        if self.odometry is None:
+            lines.append("Odometry: waiting")
+        else:
+            odom = self.odometry
+            lines.append(
+                f"Odometry: frame={odom['frame_id']} child={odom['child_frame_id']} "
+                f"reset={odom['reset_counter']} quality={odom['quality']} pos={odom['position']}"
+            )
+        return lines
+
+    def _render_track(self):
+        if self.track is None:
+            return ["Track geometry: waiting"]
+        active = self.race_status.get("active_gate_index") if self.race_status else None
+        gate = self.track["gates"].get(active)
+        summary = (
+            f"Track geometry: valid={self.track['valid']} gates={len(self.track['gates'])}/"
+            f"{self.track['count']} rejected={self.track['rejected']}"
+        )
+        if gate is None:
+            return [summary, f"Active gate {active}: geometry unavailable"]
+        return [
+            summary,
+            f"Active gate {active}: pos_ned={gate['position_ned']} "
+            f"size=({gate['width_m']:.2f}, {gate['height_m']:.2f}) m",
         ]
 
 

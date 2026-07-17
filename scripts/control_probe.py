@@ -68,6 +68,12 @@ class ControlProbe:
             "armed", "cmd_roll_rate", "cmd_pitch_rate", "cmd_yaw_rate", "cmd_thrust",
             "accel_x", "accel_y", "accel_z", "gyro_x", "gyro_y", "gyro_z",
             "gate_detected", "gate_cx", "gate_cy", "gate_area_px", "gate_range_m",
+            "vehicle_state_valid", "position_source", "attitude_source",
+            "rates_source", "odometry_age_s", "local_position_age_s", "attitude_age_s", "imu_age_s",
+            "position_n", "position_e", "position_d", "velocity_n", "velocity_e", "velocity_d",
+            "roll", "pitch", "yaw", "track_geometry_valid", "active_gate_distance_m",
+            "active_gate_body_x", "active_gate_body_y", "active_gate_body_z",
+            "active_gate_width_m", "active_gate_height_m", "odometry_reset_counter",
             "collision_id", "collision_threat", "collision_impulse",
         ])
         self.writer.writeheader()
@@ -220,6 +226,12 @@ class ControlProbe:
         gate = self.data.get("gate") or {}
         centroid = gate.get("centroid") or (None, None)
         collision = self.data.get("collision") or {}
+        vehicle = self.data.get("vehicle_state") or {}
+        active_gate = self.data.get("active_gate_state") or {}
+        position = vehicle.get("position_ned") or ("", "", "")
+        velocity = vehicle.get("velocity_ned") or ("", "", "")
+        euler = vehicle.get("euler") or ("", "", "")
+        gate_body = active_gate.get("relative_position_body") or ("", "", "")
         phase = self.phases()[self.phase_index] if self.phase_index < len(self.phases()) else None
         self.writer.writerow({
             "wall_time": time.time(),
@@ -242,6 +254,23 @@ class ControlProbe:
             "gate_cy": centroid[1] if centroid[1] is not None else "",
             "gate_area_px": gate.get("area_px", ""),
             "gate_range_m": gate.get("range_m", ""),
+            "vehicle_state_valid": vehicle.get("valid", False),
+            "position_source": vehicle.get("position_source", ""),
+            "attitude_source": vehicle.get("attitude_source", ""),
+            "rates_source": vehicle.get("rates_source", ""),
+            "odometry_age_s": vehicle.get("odometry_age_s", ""),
+            "local_position_age_s": vehicle.get("local_position_age_s", ""),
+            "attitude_age_s": vehicle.get("attitude_age_s", ""),
+            "imu_age_s": vehicle.get("imu_age_s", ""),
+            "position_n": position[0], "position_e": position[1], "position_d": position[2],
+            "velocity_n": velocity[0], "velocity_e": velocity[1], "velocity_d": velocity[2],
+            "roll": euler[0], "pitch": euler[1], "yaw": euler[2],
+            "track_geometry_valid": active_gate.get("valid", False),
+            "active_gate_distance_m": active_gate.get("distance_m", ""),
+            "active_gate_body_x": gate_body[0], "active_gate_body_y": gate_body[1], "active_gate_body_z": gate_body[2],
+            "active_gate_width_m": active_gate.get("width_m", ""),
+            "active_gate_height_m": active_gate.get("height_m", ""),
+            "odometry_reset_counter": vehicle.get("odometry_reset_counter", ""),
             "collision_id": collision.get("collision_id", ""),
             "collision_threat": collision.get("threat_level", ""),
             "collision_impulse": collision.get("impulse", ""),

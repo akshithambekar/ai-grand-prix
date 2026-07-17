@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 from stable_baselines3 import PPO
 
 from controls.episode_manager import EpisodeConfig
+from controls.model_compat import validate_model_schema
 from controls.runtime import create_official_env
 
 
@@ -25,7 +26,7 @@ def parse_args():
     parser.add_argument("--vision-port", type=int, default=5600)
     parser.add_argument("--target-gates", type=int, default=1, help="0 means full course")
     parser.add_argument("--episodes", type=int, default=10)
-    parser.add_argument("--output", type=Path, default=Path("artifacts/evaluation.csv"))
+    parser.add_argument("--output", type=Path, default=Path("artifacts/state_v2/evaluation.csv"))
     return parser.parse_args()
 
 
@@ -42,13 +43,16 @@ def main():
         vision_port=args.vision_port,
         episode_config=EpisodeConfig(target_gate_count=args.target_gates or None),
     )
-    model = PPO.load(args.model)
+    model = validate_model_schema(PPO.load(args.model))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     reasons = Counter()
     successes = 0
     fields = [
         "episode", "reward", "gates_passed", "highest_gate_index",
-        "duration_s", "reason", "success",
+        "duration_s", "reason", "success", "vehicle_state_availability",
+        "track_geometry_availability", "state_fallback_count", "mean_speed_m_s",
+        "max_speed_m_s", "max_attitude_rad", "max_body_rate_rad_s",
+        "gate_distance_change_m", "mean_vision_range_error_m",
     ]
 
     try:
@@ -78,6 +82,15 @@ def main():
                     "duration_s": info.get("episode_duration_s"),
                     "reason": info.get("termination_reason"),
                     "success": success,
+                    "vehicle_state_availability": info.get("vehicle_state_availability"),
+                    "track_geometry_availability": info.get("track_geometry_availability"),
+                    "state_fallback_count": info.get("state_fallback_count"),
+                    "mean_speed_m_s": info.get("mean_speed_m_s"),
+                    "max_speed_m_s": info.get("max_speed_m_s"),
+                    "max_attitude_rad": info.get("max_attitude_rad"),
+                    "max_body_rate_rad_s": info.get("max_body_rate_rad_s"),
+                    "gate_distance_change_m": info.get("gate_distance_change_m"),
+                    "mean_vision_range_error_m": info.get("mean_vision_range_error_m"),
                 })
                 print(f"Episode {episode}: {info.get('termination_reason')}", flush=True)
     finally:

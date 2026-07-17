@@ -132,6 +132,70 @@ class EpisodeManagerTests(unittest.TestCase):
         self.assertEqual(event.reason, "curriculum_complete")
         self.assertEqual(event.gates_passed, 1)
 
+    def set_physical_state(self, *, position=(0.0, 0.0, 0.0), velocity=(2.0, 0.0, 0.0),
+                           euler=(0.0, 0.0, 0.0), rates=(0.0, 0.0, 0.0), distance=10.0):
+        self.data["vehicle_state"] = {
+            "valid": True, "position_ned": position, "velocity_ned": velocity,
+            "euler": euler, "body_rates": rates,
+        }
+        self.data["active_gate_state"] = {
+            "valid": True, "gate_id": 0, "distance_m": distance,
+        }
+
+    def test_sustained_inversion_ends_episode(self):
+        self.start_episode()
+        self.set_physical_state(euler=(2.0, 0.0, 0.0))
+        self.data["gate"] = frame(3, 5.0)
+        self.assertFalse(self.manager.update(now=5.0).episode_ended)
+        self.data["gate"] = frame(4, 5.6)
+        event = self.manager.update(now=5.6)
+        self.assertEqual(event.reason, "inverted")
+
+    def test_sustained_tumble_ends_episode(self):
+        self.start_episode()
+        self.set_physical_state(rates=(9.0, 0.0, 0.0))
+        self.data["gate"] = frame(3, 5.0)
+        self.manager.update(now=5.0)
+        self.data["gate"] = frame(4, 5.6)
+        event = self.manager.update(now=5.6)
+        self.assertEqual(event.reason, "tumbling")
+
+    def test_position_divergence_ends_episode(self):
+        self.set_physical_state(distance=10.0)
+        self.start_episode()
+        self.data["active_gate_state"]["distance_m"] = 16.0
+        self.data["gate"] = frame(3, 5.0)
+        self.manager.update(now=5.0)
+        self.data["gate"] = frame(4, 6.6)
+        event = self.manager.update(now=6.6)
+        self.assertEqual(event.reason, "position_divergence")
+
+    def test_out_of_bounds_ends_episode(self):
+        self.set_physical_state(position=(0.0, 0.0, 0.0))
+        self.start_episode()
+        self.data["vehicle_state"]["position_ned"] = (101.0, 0.0, 0.0)
+        self.data["gate"] = frame(3, 5.0)
+        self.manager.update(now=5.0)
+        self.data["gate"] = frame(4, 5.6)
+        event = self.manager.update(now=5.6)
+        self.assertEqual(event.reason, "out_of_bounds")
+
+    def test_stationary_state_ends_episode_after_grace_and_hold(self):
+        self.set_physical_state(velocity=(0.0, 0.0, 0.0))
+        self.start_episode()
+        self.data["gate"] = frame(3, 9.2)
+        self.manager.update(now=9.2)
+        self.data["gate"] = frame(4, 12.3)
+        event = self.manager.update(now=12.3)
+        self.assertEqual(event.reason, "stuck")
+
+    def test_odometry_reset_counter_can_confirm_reset_epoch(self):
+        self.data["odometry"] = {"reset_counter": 1}
+        self.manager.request_reset(now=0.0)
+        self.data["odometry"] = {"reset_counter": 2}
+        event = self.manager.update(now=0.1)
+        self.assertEqual(event.phase, EpisodePhase.COUNTDOWN)
+
 
 if __name__ == "__main__":
     unittest.main()

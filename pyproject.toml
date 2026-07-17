@@ -11,6 +11,7 @@ dependencies = [
     "numpy",
     "opencv-python",
     "pymavlink",
+    "python-dotenv",
     "stable-baselines3",
     "tensorboard",
 ]

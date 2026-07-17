@@ -1,6 +1,7 @@
 import time
 
 from controls.episode_manager import EpisodeConfig, EpisodeManager
+from controls.readiness import wait_for_vehicle_state
 from controls.setup import setup_components, shutdown_components
 from gym_env.ai_gp_env import AIGPEnv
 from scripts.reset_hotkey import ResetHotkey
@@ -24,6 +25,15 @@ def create_official_env(
         vision_ip,
         vision_port,
     )
+    try:
+        report = wait_for_vehicle_state(data)
+    except Exception:
+        shutdown_components(components)
+        raise
+    if report["track_geometry_valid"]:
+        print(f"state_v2 telemetry ready: {report}", flush=True)
+    else:
+        print(f"state_v2 telemetry ready; track geometry unavailable, using vision fallback: {report}", flush=True)
     controller = components["controller"]
     episodes = EpisodeManager(
         data,

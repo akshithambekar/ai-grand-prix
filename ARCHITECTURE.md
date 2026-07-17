@@ -15,7 +15,7 @@ Official simulator
   `-- FPV video UDP 0.0.0.0:5600
              |
              v
-MAVLinkRX + VisionRX/GateTracker
+MAVLinkRX + canonical vehicle/active-gate state + VisionRX/GateTracker
              |
              v
         shared_data
@@ -62,24 +62,26 @@ non-finite actions, clamps normalized input, and requires explicit command permi
 
 ### Observation
 
-The policy consumes a normalized 19-value vector:
+The policy consumes the normalized 38-value `state_v2` vector:
 
 ```text
 detected
-center_x, center_y, log_area
-delta_center_x, delta_center_y, delta_log_area
-tracking_confidence, missed_frames
-gyro_x, gyro_y, gyro_z
-accel_x, accel_y, accel_z
+center_x, center_y, log_area, tracking_confidence, missed_frames
+vehicle_state_valid
+local_position_ned[3], local_velocity_ned[3]
+sin/cos(roll, pitch, yaw)
+body_rates[3], body_acceleration[3]
+track_geometry_valid
+active_gate_body_position[3], active_gate_body_normal[3]
+gate_width, gate_height
 previous_action[4]
 ```
 
-Centroids are mapped to `[-1, 1]`. Area uses normalized log image area. Gyroscope values
-are divided by `5 rad/s`; acceleration values by `20 m/s^2`. Missing data becomes zero
-with `detected=0`. Temporal deltas require the same track ID and gate index.
-
-Metric range, body position, PnP, and vision velocity remain excluded because camera and
-gate dimensions are uncalibrated.
+Centroids are mapped to `[-1, 1]`; area uses normalized log image area. Position,
+velocity, rates, acceleration, gate-relative position, and dimensions use fixed scales of
+`100 m`, `20 m/s`, `5 rad/s`, `20 m/s^2`, `50 m`, and `10 m`. Missing state groups are
+zero only with their validity mask cleared. Odometry in `MAV_FRAME_LOCAL_NED` is preferred;
+fresh local position and attitude are fallbacks. NED gate vectors are rotated into body FRD.
 
 ## Reward and episodes
 
@@ -91,10 +93,13 @@ Reward components:
 +50.0  course completion
 -20.0  environment or severe gate collision
 -2.0   non-terminal gate contact
-+/-0.5 maximum dense visual-progress term
++/-0.5 maximum true gate-distance progress (visual potential fallback)
+up to -0.1 lateral/vertical gate-alignment penalty
 ```
 
-Dense reward uses the change in this potential:
+With valid track geometry, dense reward uses reduction in true active-gate distance and a
+bounded gate-opening alignment penalty. If track geometry is absent, it falls back to the
+change in this visual potential:
 
 ```python
 error = sqrt(center_x**2 + center_y**2)
@@ -116,6 +121,8 @@ fresh post-reset vision frame. It also terminates on:
 - gate and episode timeout;
 - sustained gate loss;
 - vision-stream stall.
+- sustained inversion or tumbling;
+- position divergence, out-of-bounds travel, or a stationary/stuck state.
 
 Physical terminal states return `terminated=True`. Time and data failures return
 `truncated=True`. Gym returns the final pre-reset observation, and the next `reset()`
@@ -144,7 +151,8 @@ PPO(
 Curriculum stages require 1, 2, 3, then all gates. Advance after deterministic evaluation
 reaches at least 80% success over ten episodes. Evaluation pauses training and reuses the
 same simulator. Models, checkpoints, Monitor output, episode metrics, and TensorBoard logs
-are written under `artifacts/`.
+are written under `artifacts/state_v2/`. Former 19-value policies are intentionally
+incompatible and are rejected before evaluation or resume.
 
 ## Verification sequence
 

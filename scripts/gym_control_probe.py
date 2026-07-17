@@ -16,7 +16,7 @@ from controls.episode_manager import EpisodeConfig, EpisodePhase
 from controls.runtime import create_official_env
 
 
-DEFAULT_LOG_DIR = REPO_ROOT / "artifacts" / "gym_control_probe"
+DEFAULT_LOG_DIR = REPO_ROOT / "artifacts" / "state_v2" / "gym_control_probe"
 
 
 def parse_args():
@@ -67,6 +67,7 @@ def main():
         "wall_time", "elapsed", "phase", "active_gate_index", "track_id",
         "detected", "action", "reward", "reward_components", "terminated",
         "truncated", "termination_reason", "command_sends", "observation",
+        "vehicle_state", "active_gate_state",
     ]
 
     try:
@@ -109,6 +110,8 @@ def main():
                     "termination_reason": info.get("termination_reason"),
                     "command_sends": info.get("command_sends"),
                     "observation": json.dumps(observation.tolist()),
+                    "vehicle_state": json.dumps(info.get("vehicle_state", {})),
+                    "active_gate_state": json.dumps(info.get("active_gate_state", {})),
                 })
 
                 if terminated or truncated:

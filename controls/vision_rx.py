@@ -72,16 +72,10 @@ HOLE_RESOLVABLE_SIDE_PX = 60.0
 # --------------------------------------------------------------------------------------
 # CAMERA / GATE GEOMETRY
 #
-# !!! UNCALIBRATED ASSUMPTIONS - see notes below !!!
-#
-# Gate dimensions are no longer published in telemetry (they are nulled by the current
-# simulator config, see mavlink_rx.on_track_data), and the FPV stream carries no
-# intrinsics, so range/PnP depend on these two numbers being right. They are estimates,
-# not measurements. Every metric output (range_m, gate_body_pos, pnp_*, vision_velocity)
-# scales linearly with GATE_OUTER_WIDTH_M and inversely with the focal length, so both
-# must be checked against ground truth before the controller trusts absolute distances.
-# Bearing (the centroid offset) is unaffected by GATE_OUTER_WIDTH_M and is the trustworthy
-# part of this estimate until calibration happens.
+# Restored track telemetry supplies per-gate dimensions when valid. The width constant is
+# retained for simulator modes that zero track geometry. The FPV stream still carries no
+# intrinsics, so metric vision range/PnP remain diagnostic cross-checks. Bearing is
+# unaffected by the width/focal-length assumptions.
 # --------------------------------------------------------------------------------------
 GATE_OUTER_WIDTH_M = 1.5      # ASSUMPTION: outer edge-to-edge width of the square gate
 CAMERA_HFOV_DEG = 90.0        # ASSUMPTION: horizontal field of view of the FPV camera
@@ -300,7 +294,6 @@ class VisionRX:
         self._close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, CLOSE_KERNEL_SIZE)
         self._open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, OPEN_KERNEL_SIZE)
         self._intrinsics = None          # (K, dist), built lazily once frame size is known
-        self._object_points = None       # gate corners in gate-local metres
         self._prev = None                # (t_s, body_pos) of the last successful detection
         self._frame_count = 0
         self._frame_sequence = FrameSequenceGuard()
@@ -501,10 +494,11 @@ class VisionRX:
         # Range from the pinhole model on the gate's known outer width. minAreaRect is
         # rotation-invariant, so it beats the axis-aligned box when the gate is banked.
         (_, _), (rw, rh), _ = cv2.minAreaRect(contour)
-        width_px = 0.5 * (rw + rh)
+        gate_width_m, gate_height_m, dimensions_source = self._active_gate_dimensions()
+        width_px = float(np.sqrt(rw * rh))
         if width_px <= 1.0:
             return None
-        range_m = (fx * GATE_OUTER_WIDTH_M) / width_px
+        range_m = (fx * float(np.sqrt(gate_width_m * gate_height_m))) / width_px
 
         # Body frame is FRD: x forward, y right, z down. The camera looks down body +x,
         # so camera x (right) maps to body y and camera y (down) maps to body z.
@@ -514,7 +508,9 @@ class VisionRX:
             float((cy - ppy) * range_m / fy),
         )
 
-        pnp_ok, pnp_rvec = self._solve_pnp(contour, K, dist)
+        pnp_ok, pnp_rvec = self._solve_pnp(
+            contour, K, dist, gate_width_m, gate_height_m
+        )
         return {
             "bbox": (int(x), int(y), int(bw), int(bh)),
             "centroid": (float(cx), float(cy)),
@@ -525,9 +521,20 @@ class VisionRX:
             "pnp_ok": pnp_ok,
             "pnp_rvec": pnp_rvec,
             "vision_velocity": None,
+            "gate_dimensions_m": (gate_width_m, gate_height_m),
+            "gate_dimensions_source": dimensions_source,
         }
 
-    def _solve_pnp(self, contour, K, dist):
+    def _active_gate_dimensions(self):
+        active_gate = self.data.get("active_gate_state") or {}
+        if active_gate.get("valid"):
+            width = active_gate.get("width_m")
+            height = active_gate.get("height_m")
+            if width and height and width > 0 and height > 0:
+                return float(width), float(height), "track"
+        return GATE_OUTER_WIDTH_M, GATE_OUTER_WIDTH_M, "assumed"
+
+    def _solve_pnp(self, contour, K, dist, gate_width_m, gate_height_m):
         """Gate-normal pose from the four outer corners, for yaw alignment."""
         peri = cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
@@ -535,9 +542,17 @@ class VisionRX:
             return False, None
 
         image_points = _order_corners(approx)
+        half_w = gate_width_m / 2.0
+        half_h = gate_height_m / 2.0
+        object_points = np.array([
+            [-half_w, -half_h, 0.0],
+            [half_w, -half_h, 0.0],
+            [half_w, half_h, 0.0],
+            [-half_w, half_h, 0.0],
+        ], dtype=np.float32)
         ok, rvec, _ = cv2.solvePnP(
-            self._object_points, image_points, K, dist,
-            flags=cv2.SOLVEPNP_IPPE_SQUARE,
+            object_points, image_points, K, dist,
+            flags=cv2.SOLVEPNP_IPPE,
         )
         if not ok:
             return False, None
@@ -571,14 +586,6 @@ class VisionRX:
             ], dtype=np.float64)
             self._intrinsics = (K, np.zeros((4, 1), dtype=np.float64))
 
-            half = GATE_OUTER_WIDTH_M / 2.0
-            # Matches _order_corners: TL, TR, BR, BL in the gate's own plane.
-            self._object_points = np.array([
-                [-half, -half, 0.0],
-                [half, -half, 0.0],
-                [half, half, 0.0],
-                [-half, half, 0.0],
-            ], dtype=np.float32)
         return self._intrinsics
 
     # ----------------------------------------------------------------------------------
@@ -613,6 +620,8 @@ class VisionRX:
                 "pnp_ok": False,
                 "pnp_rvec": None,
                 "vision_velocity": None,
+                "gate_dimensions_m": None,
+                "gate_dimensions_source": None,
             })
             self._prev = None
 

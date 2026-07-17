@@ -30,6 +30,16 @@ Live Gym and PPO runs require the official simulator and this repository to run 
 same Windows machine. Use one live script at a time because MAVLink port `14550` and
 vision port `5600` each have one receiver.
 
+Validate restored telemetry before any live movement or training:
+
+```powershell
+uv run python scripts\telemetry_readiness_probe.py
+```
+
+The readiness probe requires a fresh canonical vehicle state. Missing or zeroed track
+geometry is reported and uses vision fallback rather than aborting. The policy interface is
+`state_v2` with 38 observations; older 19-value checkpoints cannot be resumed or evaluated.
+
 Validate the Gym pipeline with the proven first-gate sequence:
 
 ```powershell
@@ -48,10 +58,18 @@ Run the first 512-step PPO smoke rollout:
 uv run python scripts\train_ppo.py --execute --target-gates 1 --total-timesteps 512
 ```
 
+The MLP PPO policy explicitly uses `device="cpu"`, which is the Stable-Baselines3
+recommended backend for this policy architecture.
+
+To keep training options in one place, copy `.env.example` to `.env` and edit its values.
+It supports execution, simulator/vision addresses and ports, target gates, total timesteps,
+seed, and resume checkpoint. Command-line arguments override `.env`; `--no-execute` can
+always suppress live training even if `AIGP_EXECUTE=true` is configured.
+
 Evaluate a saved model for ten deterministic episodes after pausing training:
 
 ```powershell
-uv run python scripts\evaluate_ppo.py artifacts\models\ppo_aigp_final.zip --execute --target-gates 1 --episodes 10
+uv run python scripts\evaluate_ppo.py artifacts\state_v2\models\ppo_aigp_final.zip --execute --target-gates 1 --episodes 10
 ```
 
 See `ARCHITECTURE.md` for the action, observation, reward, reset, and curriculum design.
@@ -62,7 +80,8 @@ See `ARCHITECTURE.md` for the action, observation, reward, reset, and curriculum
 
 Component: `controls/vision_rx.py`
 
-Status: implemented and working on a real frame, but uncalibrated.
+Status: implemented; restored track dimensions are used when valid, with assumed dimensions
+as a documented fallback.
 Bearing is trustworthy now.
 Absolute range is not, until the two constants below are confirmed.
 
@@ -78,9 +97,8 @@ Absolute range is not, until the two constants below are confirmed.
 
 ### Open
 
-- [ ] **Calibrate `GATE_OUTER_WIDTH_M`** (currently an assumed 1.5m).
-      Gate dimensions are nulled in telemetry as of the current simulator config, so this cannot be recovered from the wire.
-      Every metric output scales linearly with it.
+- [x] **Use restored per-gate dimensions when available.**
+      `GATE_OUTER_WIDTH_M` remains only as the fallback for simulator modes that zero track data.
 - [ ] **Confirm `CAMERA_HFOV_DEG`** (currently an assumed 90 degrees).
       The FPV stream carries no intrinsics.
       Range and PnP scale inversely with the derived focal length.
