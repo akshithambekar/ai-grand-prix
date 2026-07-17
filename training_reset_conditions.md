@@ -2,16 +2,11 @@
 
 Automated episode-termination conditions for training, plus what to measure per episode.
 
-## Prerequisite: telemetry is not reaching `shared_data`
+## Telemetry plumbing: complete
 
-Most of the triggers below are not implementable yet.
-Every handler in `mavlink_rx.py` unpacks its message into local variables and then drops them on the floor.
-`on_race_status` (mavlink_rx.py:205) parses `active_gate_index` and `last_gate_race_time` and discards both.
-`on_collision` (mavlink_rx.py:263) parses `collision_id`, `threat_level` and the impulse magnitude and discards all three.
-Vision is the only component actually publishing, via `self.data["gate"]`.
+`mavlink_rx.py` now publishes heartbeat/armed state, HIGHRES_IMU, race status, and collision snapshots into `shared_data`. Collision snapshots include a monotonically increasing sequence for deduplication. Vision publishes via `self.data["gate"]`.
 
-Step one is plumbing race status and collisions into `shared_data`, following the atomic dict swap convention `vision_rx` already uses.
-After that, most of the triggers below are a few lines each.
+The reset/countdown lifecycle is implemented in `controls/episode_manager.py` and wired into `controls/main.py`.
 
 ## Constraint: what is actually observable
 
@@ -132,6 +127,4 @@ Watching for `active_gate_index` to return to 0 is the obvious candidate, assumi
 
 ## Open work
 
-`main.py` has no episode concept at all.
-It is a bare `while is_running` loop that never terminates.
-An episode runner has to sit around `controller.update()` before any of this can be wired up.
+The remaining work is to add episode metrics, target continuity, the conservative visual servo, and the Gymnasium wrapper. The manager currently handles the core reset handshake and initial termination conditions; tumbling, inversion, range divergence, and stuck-state triggers should be added after their thresholds are validated against motion logs.

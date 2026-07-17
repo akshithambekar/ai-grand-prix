@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.reset_hotkey import ResetHotkey
+from episode_manager import EpisodeManager
 from setup import setup_components
 
 # Modify these properties if you want to run the server remotely for example
@@ -31,18 +32,31 @@ controller = components['controller']
 ts_loop = components['ts_loop']
 mavlink_rx = components['mavlink_rx']
 vision_rx = components['vision_rx']
+episodes = EpisodeManager(
+    shared_data,
+    send_reset=controller.send_sim_reset_command,
+    send_arm=controller.arm,
+)
 
-print("Arming drone...", flush=True)
-controller.arm()
-print("Starting control loop...", flush=True)
+print("Preparing initial episode...", flush=True)
 reset_hotkey = ResetHotkey()
+episodes.request_reset(reason="initial")
+print("Starting episode loop...", flush=True)
 is_running = True
 try:
     while is_running:
         if reset_hotkey.consume_request():
-            controller.send_sim_reset_command()
-            print("Reset command sent.", flush=True)
-        controller.update()
+            episodes.request_reset(reason="manual")
+            print("Reset requested.", flush=True)
+        event = episodes.update()
+        if event.episode_started:
+            print(f"Episode {event.episode_id} started.", flush=True)
+        if event.episode_ended:
+            print(f"Episode ended: {event.reason}", flush=True)
+        if event.command_allowed:
+            controller.update()
+        else:
+            time.sleep(1.0 / 250.0)
 except KeyboardInterrupt:
     print("Stopping client...", flush=True)
 finally:

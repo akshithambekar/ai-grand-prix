@@ -100,6 +100,14 @@ HUD_REGIONS_NORM = []
 DEBUG_DUMP_DIR = os.environ.get("VISION_DEBUG_DIR")
 DEBUG_DUMP_EVERY_N = int(os.environ.get("VISION_DEBUG_EVERY_N", "15"))
 
+# --------------------------------------------------------------------------------------
+# TARGET TRACKING
+# --------------------------------------------------------------------------------------
+TRACK_MAX_MISSED_FRAMES = 3
+TRACK_MAX_SIZE_RATIO = 2.5
+TRACK_MAX_CENTER_DISTANCE_FRAC = 0.12
+TRACK_EDGE_MARGIN_FRAC = 0.02
+
 
 def _order_corners(pts):
     """Order 4 points as top-left, top-right, bottom-right, bottom-left.
@@ -117,6 +125,152 @@ def _order_corners(pts):
     ], dtype=np.float32)
 
 
+def _bbox_iou(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    x0, y0 = max(ax, bx), max(ay, by)
+    x1, y1 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    intersection = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+    union = aw * ah + bw * bh - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+class GateTracker:
+    """Keep one gate target stable across competing contours and brief dropouts."""
+
+    def __init__(self, max_missed_frames=TRACK_MAX_MISSED_FRAMES):
+        self.max_missed_frames = max_missed_frames
+        self.track_id = 0
+        self.current = None
+        self.missed_frames = 0
+        self.gate_index = None
+
+    def reset(self):
+        self.current = None
+        self.missed_frames = 0
+
+    def update(self, candidates, frame_shape, gate_index=None):
+        candidates = sorted(candidates, key=lambda item: item["area_px"], reverse=True)
+        gate_changed = (
+            gate_index is not None
+            and self.gate_index is not None
+            and gate_index != self.gate_index
+        )
+        if gate_index is not None:
+            self.gate_index = gate_index
+        if gate_changed:
+            self.reset()
+
+        usable = [
+            candidate for candidate in candidates
+            if not self._is_exit_fragment(candidate, frame_shape)
+        ]
+
+        switched = False
+        switch_reason = None
+        association_score = None
+
+        if self.current is None:
+            selected = usable[0] if usable else None
+            if selected is not None:
+                self.track_id += 1
+                self.current = selected
+                self.missed_frames = 0
+                switched = True
+                switch_reason = "gate_index_changed" if gate_changed else "acquired"
+        else:
+            selected, association_score = self._associate(usable, frame_shape)
+            if selected is not None:
+                self.current = selected
+                self.missed_frames = 0
+            else:
+                self.missed_frames += 1
+                if self.missed_frames > self.max_missed_frames:
+                    self.reset()
+                    selected = usable[0] if usable else None
+                    if selected is not None:
+                        self.track_id += 1
+                        self.current = selected
+                        switched = True
+                        switch_reason = "association_lost"
+
+        confidence = 0.0
+        if self.current is not None:
+            confidence = max(
+                0.0,
+                1.0 - self.missed_frames / (self.max_missed_frames + 1),
+            )
+            if association_score is not None:
+                confidence *= max(0.0, 1.0 - association_score)
+
+        detection = self.current if self.current is not None and self.missed_frames == 0 else None
+        return detection, {
+            "track_id": self.track_id if self.current is not None else None,
+            "candidate_count": len(candidates),
+            "tracking_confidence": confidence,
+            "tracking_missed_frames": self.missed_frames,
+            "track_switched": switched,
+            "track_switch_reason": switch_reason,
+            "association_score": association_score,
+            "rejected_edge_fragments": len(candidates) - len(usable),
+            "candidates": tuple(self._candidate_summary(item) for item in candidates),
+        }
+
+    def _associate(self, candidates, frame_shape):
+        h, w = frame_shape[:2]
+        diagonal = max((w * w + h * h) ** 0.5, 1.0)
+        previous_area = max(self.current["area_px"], 1.0)
+        best = None
+        best_score = None
+
+        for candidate in candidates:
+            area = max(candidate["area_px"], 1.0)
+            size_ratio = max(area / previous_area, previous_area / area)
+            if size_ratio > TRACK_MAX_SIZE_RATIO:
+                continue
+
+            px, py = self.current["centroid"]
+            cx, cy = candidate["centroid"]
+            center_distance = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5 / diagonal
+            overlap = _bbox_iou(self.current["bbox"], candidate["bbox"])
+            if center_distance > TRACK_MAX_CENTER_DISTANCE_FRAC and overlap == 0.0:
+                continue
+
+            size_penalty = abs(np.log(area / previous_area)) / np.log(TRACK_MAX_SIZE_RATIO)
+            score = 0.55 * (center_distance / TRACK_MAX_CENTER_DISTANCE_FRAC)
+            score += 0.25 * size_penalty
+            score += 0.20 * (1.0 - overlap)
+            if best_score is None or score < best_score:
+                best, best_score = candidate, float(score)
+
+        return best, best_score
+
+    @staticmethod
+    def _is_exit_fragment(candidate, frame_shape):
+        h, w = frame_shape[:2]
+        x, y, bw, bh = candidate["bbox"]
+        margin_x = w * TRACK_EDGE_MARGIN_FRAC
+        margin_y = h * TRACK_EDGE_MARGIN_FRAC
+        touches_edge = (
+            x <= margin_x
+            or y <= margin_y
+            or x + bw >= w - margin_x
+            or y + bh >= h - margin_y
+        )
+        cx, cy = candidate["centroid"]
+        off_center = abs(cx - w / 2.0) > 0.20 * w or abs(cy - h / 2.0) > 0.20 * h
+        return touches_edge and off_center
+
+    @staticmethod
+    def _candidate_summary(candidate):
+        return {
+            "bbox": candidate["bbox"],
+            "centroid": candidate["centroid"],
+            "area_px": candidate["area_px"],
+            "has_hole": candidate["has_hole"],
+        }
+
+
 class VisionRX:
 
     def __init__(self, data):
@@ -132,6 +286,8 @@ class VisionRX:
         self._object_points = None       # gate corners in gate-local metres
         self._prev = None                # (t_s, body_pos) of the last successful detection
         self._frame_count = 0
+        self._last_frame_id = None
+        self._tracker = GateTracker()
 
         self.is_running = True
         self.thread.start()
@@ -218,10 +374,28 @@ class VisionRX:
         t_s = (sim_time_ns / 1e9) if sim_time_ns is not None else time.time()
         self._frame_count += 1
 
-        mask = self._build_mask(img)
-        detection = self._find_gate(mask, img.shape, t_s)
+        if self._last_frame_id is not None and frame_id <= self._last_frame_id:
+            self._tracker.reset()
+            self._prev = None
+        self._last_frame_id = frame_id
 
-        self._publish(frame_id, t_s, detection)
+        mask = self._build_mask(img)
+        candidates = self._find_gate_candidates(mask, img.shape, t_s)
+        race_status = self.data.get("race_status") or {}
+        detection, tracking = self._tracker.update(
+            candidates,
+            img.shape,
+            race_status.get("active_gate_index"),
+        )
+        if tracking["track_switched"]:
+            self._prev = None
+        if detection is not None:
+            detection = dict(detection)
+            detection["vision_velocity"] = self._estimate_velocity(
+                detection["gate_body_pos"], t_s
+            )
+
+        self._publish(frame_id, t_s, detection, tracking, img.shape)
         self._maybe_dump_debug(frame_id, img, mask)
 
     def _build_mask(self, img):
@@ -242,15 +416,14 @@ class VisionRX:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._open_kernel)
         return mask
 
-    def _find_gate(self, mask, shape, t_s):
-        """Pick the nearest gate-shaped contour, or return None."""
+    def _find_gate_candidates(self, mask, shape, t_s):
+        """Return every valid gate candidate, ordered from largest to smallest."""
         contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if hierarchy is None:
-            return None
+            return []
         hierarchy = hierarchy[0]
 
-        best = None
-        best_area = 0.0
+        candidates = []
         for i, contour in enumerate(contours):
             # RETR_CCOMP puts outer boundaries at the top level; holes are their children.
             if hierarchy[i][3] != -1:
@@ -283,14 +456,11 @@ class VisionRX:
             if min(rw, rh) >= HOLE_RESOLVABLE_SIDE_PX and fill_ratio > MAX_FILL_RATIO:
                 continue
 
-            # Largest survivor is the nearest gate, and the one to fly.
-            if area > best_area:
-                best_area = area
-                best = (contour, has_hole)
+            measurement = self._measure(contour, has_hole, shape, t_s)
+            if measurement is not None:
+                candidates.append(measurement)
 
-        if best is None:
-            return None
-        return self._measure(best[0], best[1], shape, t_s)
+        return sorted(candidates, key=lambda item: item["area_px"], reverse=True)
 
     def _measure(self, contour, has_hole, shape, t_s):
         h, w = shape[:2]
@@ -323,8 +493,6 @@ class VisionRX:
         )
 
         pnp_ok, pnp_rvec = self._solve_pnp(contour, K, dist)
-        velocity = self._estimate_velocity(body_pos, t_s)
-
         return {
             "bbox": (int(x), int(y), int(bw), int(bh)),
             "centroid": (float(cx), float(cy)),
@@ -334,7 +502,7 @@ class VisionRX:
             "gate_body_pos": body_pos,
             "pnp_ok": pnp_ok,
             "pnp_rvec": pnp_rvec,
-            "vision_velocity": velocity,
+            "vision_velocity": None,
         }
 
     def _solve_pnp(self, contour, K, dist):
@@ -394,7 +562,7 @@ class VisionRX:
     # ----------------------------------------------------------------------------------
     # Publishing
     # ----------------------------------------------------------------------------------
-    def _publish(self, frame_id, t_s, detection):
+    def _publish(self, frame_id, t_s, detection, tracking, frame_shape):
         """Publish an immutable snapshot under a single atomic dict assignment.
 
         shared_data is a plain dict with no established locking convention and this is its
@@ -407,6 +575,8 @@ class VisionRX:
             "frame_id": frame_id,
             "timestamp_s": t_s,
             "detected": detection is not None,
+            "frame_size": (int(frame_shape[1]), int(frame_shape[0])),
+            **tracking,
         }
         if detection is not None:
             snapshot.update(detection)

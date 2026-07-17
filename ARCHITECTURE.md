@@ -199,7 +199,7 @@ An episode ends on course completion, collision, per-gate timeout, unrecoverable
 ## Implementation order
 
 1. **Publish observable MAVLink state.** Update `mavlink_rx.py` so heartbeat/armed state, `HIGHRES_IMU`, race status, and collision events reach `shared_data` as complete immutable snapshots. Add a receive timestamp and a monotonically increasing event sequence where deduplication matters. Unit-test each handler with fake MAVLink messages.
-2. **Build the episode state machine.** Implement `ACTIVE`, `RESET_REQUESTED`, `COUNTDOWN`, and `AWAIT_FRESH_FRAME`; enforce the three-second no-command period through fresh race status rather than wall-clock sleeping.
+2. **Build the episode state machine.** Implemented in `controls/episode_manager.py` and wired into `controls/main.py`. It implements `ACTIVE`, `RESET_REQUESTED`, `COUNTDOWN`, `WAITING_FOR_ARM`, and `AWAIT_FRESH_FRAME`, enforcing the three-second no-command period through fresh race status.
 3. **Implement termination and metrics.** Start with per-gate timeout, environment collision, severe gate collision, vision-stream stall, and a wall-clock cap. Log a reset-reason histogram and per-episode gate/split/detection/control-rate metrics.
 4. **Add target continuity.** Publish all valid gate candidates, associate the current target, reject exit fragments, and switch targets after a confirmed pass.
 5. **Implement and validate the conservative visual servo.** Require repeatable first-gate passage and then a full-course attempt with PPO residual scale zero.

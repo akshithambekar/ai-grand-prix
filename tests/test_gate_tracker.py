@@ -1,0 +1,85 @@
+import unittest
+
+from controls.vision_rx import GateTracker
+
+
+FRAME_SHAPE = (1080, 1920, 3)
+
+
+def gate(cx, cy, side, area=None, has_hole=True):
+    return {
+        "bbox": (cx - side // 2, cy - side // 2, side, side),
+        "centroid": (float(cx), float(cy)),
+        "area_px": float(area if area is not None else side * side),
+        "has_hole": has_hole,
+        "range_m": 1.0,
+        "gate_body_pos": (1.0, 0.0, 0.0),
+        "pnp_ok": False,
+        "pnp_rvec": None,
+        "vision_velocity": None,
+    }
+
+
+class GateTrackerTests(unittest.TestCase):
+    def setUp(self):
+        self.tracker = GateTracker(max_missed_frames=3)
+
+    def test_stable_approach_keeps_track_id(self):
+        selected, state = self.tracker.update([gate(960, 540, 80)], FRAME_SHAPE, 0)
+        track_id = state["track_id"]
+
+        for side in (88, 96, 108):
+            selected, state = self.tracker.update(
+                [gate(962, 542, side)], FRAME_SHAPE, 0
+            )
+            self.assertIsNotNone(selected)
+            self.assertEqual(state["track_id"], track_id)
+            self.assertFalse(state["track_switched"])
+
+    def test_larger_distant_candidate_does_not_steal_track(self):
+        _, state = self.tracker.update([gate(700, 500, 80)], FRAME_SHAPE, 0)
+        track_id = state["track_id"]
+        selected, state = self.tracker.update(
+            [gate(1300, 500, 120), gate(704, 502, 86)], FRAME_SHAPE, 0
+        )
+
+        self.assertEqual(selected["centroid"], (704.0, 502.0))
+        self.assertEqual(state["track_id"], track_id)
+
+    def test_brief_dropout_reacquires_same_track(self):
+        _, state = self.tracker.update([gate(960, 540, 80)], FRAME_SHAPE, 0)
+        track_id = state["track_id"]
+
+        for missed in range(1, 4):
+            selected, state = self.tracker.update([], FRAME_SHAPE, 0)
+            self.assertIsNone(selected)
+            self.assertEqual(state["track_id"], track_id)
+            self.assertEqual(state["tracking_missed_frames"], missed)
+
+        selected, state = self.tracker.update([gate(965, 543, 95)], FRAME_SHAPE, 0)
+        self.assertIsNotNone(selected)
+        self.assertEqual(state["track_id"], track_id)
+
+    def test_off_center_edge_fragment_is_rejected(self):
+        self.tracker.update([gate(960, 540, 100)], FRAME_SHAPE, 0)
+        fragment = gate(30, 500, 100, area=20_000)
+        selected, state = self.tracker.update(
+            [fragment, gate(965, 542, 110)], FRAME_SHAPE, 0
+        )
+
+        self.assertEqual(selected["centroid"], (965.0, 542.0))
+        self.assertEqual(state["rejected_edge_fragments"], 1)
+
+    def test_gate_index_advance_creates_new_track(self):
+        _, state = self.tracker.update([gate(960, 540, 100)], FRAME_SHAPE, 0)
+        old_track = state["track_id"]
+        selected, state = self.tracker.update([gate(1000, 600, 50)], FRAME_SHAPE, 1)
+
+        self.assertIsNotNone(selected)
+        self.assertNotEqual(state["track_id"], old_track)
+        self.assertTrue(state["track_switched"])
+        self.assertEqual(state["track_switch_reason"], "gate_index_changed")
+
+
+if __name__ == "__main__":
+    unittest.main()
