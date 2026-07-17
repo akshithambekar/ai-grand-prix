@@ -42,6 +42,7 @@ class TargetTrackerProbe:
         self.starting_gate = None
         self.stop_requested = False
         self.phase = "RESETTING"
+        self.termination_reason = ""
         self.last_command = (0.0, 0.0, 0.0, 0.0)
 
         config = EpisodeConfig(
@@ -65,7 +66,7 @@ class TargetTrackerProbe:
             "track_switched", "track_switch_reason", "association_score",
             "rejected_edge_fragments", "selected_cx", "selected_cy",
             "selected_area_px", "candidates_json", "cmd_roll_rate",
-            "cmd_pitch_rate", "cmd_yaw_rate", "cmd_thrust",
+            "cmd_pitch_rate", "cmd_yaw_rate", "cmd_thrust", "termination_reason",
         ])
         self.writer.writeheader()
 
@@ -86,6 +87,7 @@ class TargetTrackerProbe:
                     print("Tracker probe episode started.", flush=True)
 
                 if event.episode_ended:
+                    self.termination_reason = event.reason or "episode_ended"
                     print(f"Probe ended: {event.reason}", flush=True)
                     self.stop_requested = True
 
@@ -109,6 +111,7 @@ class TargetTrackerProbe:
             and active_gate > self.starting_gate
         ):
             print(f"Gate advanced {self.starting_gate} -> {active_gate}; probe passed.", flush=True)
+            self.termination_reason = "tracker_probe_complete"
             self.episodes.request_reset(reason="tracker_probe_complete", now=now)
             self.stop_requested = True
             return
@@ -116,6 +119,7 @@ class TargetTrackerProbe:
         gate = self.data.get("gate") or {}
         if self._horizontal_limit_exceeded(gate):
             print("Target exceeded horizontal safety bound; resetting.", flush=True)
+            self.termination_reason = "horizontal_safety_bound"
             self.episodes.request_reset(reason="horizontal_safety_bound", now=now)
             self.stop_requested = True
             return
@@ -196,6 +200,7 @@ class TargetTrackerProbe:
     def _handle_hotkey(self):
         if self.hotkey.consume_request():
             print("K pressed; resetting and stopping probe.", flush=True)
+            self.termination_reason = "manual_probe_stop"
             self.episodes.request_reset(reason="manual_probe_stop")
             self.stop_requested = True
 
@@ -228,6 +233,7 @@ class TargetTrackerProbe:
             "cmd_pitch_rate": pitch,
             "cmd_yaw_rate": yaw,
             "cmd_thrust": thrust,
+            "termination_reason": self.termination_reason,
         })
 
     def _stop_receivers(self):

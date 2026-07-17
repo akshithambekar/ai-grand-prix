@@ -271,6 +271,26 @@ class GateTracker:
         }
 
 
+class FrameSequenceGuard:
+    """Ignore repeated/late frames and identify real simulator reset epochs."""
+
+    def __init__(self):
+        self.last_frame_id = None
+        self.reset_epoch = None
+
+    def accept(self, frame_id, reset_epoch=None):
+        epoch_changed = reset_epoch is not None and reset_epoch != self.reset_epoch
+        if epoch_changed:
+            self.reset_epoch = reset_epoch
+            self.last_frame_id = None
+
+        if self.last_frame_id is not None and frame_id <= self.last_frame_id:
+            return False, epoch_changed
+
+        self.last_frame_id = frame_id
+        return True, epoch_changed
+
+
 class VisionRX:
 
     def __init__(self, data):
@@ -286,7 +306,7 @@ class VisionRX:
         self._object_points = None       # gate corners in gate-local metres
         self._prev = None                # (t_s, body_pos) of the last successful detection
         self._frame_count = 0
-        self._last_frame_id = None
+        self._frame_sequence = FrameSequenceGuard()
         self._tracker = GateTracker()
 
         self.is_running = True
@@ -374,14 +394,19 @@ class VisionRX:
         t_s = (sim_time_ns / 1e9) if sim_time_ns is not None else time.time()
         self._frame_count += 1
 
-        if self._last_frame_id is not None and frame_id <= self._last_frame_id:
+        race_status = self.data.get("race_status") or {}
+        accepted, reset_epoch_changed = self._frame_sequence.accept(
+            frame_id,
+            race_status.get("race_start_boot_time_ms"),
+        )
+        if reset_epoch_changed:
             self._tracker.reset()
             self._prev = None
-        self._last_frame_id = frame_id
+        if not accepted:
+            return
 
         mask = self._build_mask(img)
         candidates = self._find_gate_candidates(mask, img.shape, t_s)
-        race_status = self.data.get("race_status") or {}
         detection, tracking = self._tracker.update(
             candidates,
             img.shape,

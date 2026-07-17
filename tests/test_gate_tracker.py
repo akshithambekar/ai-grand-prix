@@ -1,6 +1,6 @@
 import unittest
 
-from controls.vision_rx import GateTracker
+from controls.vision_rx import FrameSequenceGuard, GateTracker
 
 
 FRAME_SHAPE = (1080, 1920, 3)
@@ -79,6 +79,23 @@ class GateTrackerTests(unittest.TestCase):
         self.assertNotEqual(state["track_id"], old_track)
         self.assertTrue(state["track_switched"])
         self.assertEqual(state["track_switch_reason"], "gate_index_changed")
+
+
+class FrameSequenceGuardTests(unittest.TestCase):
+    def test_duplicate_and_late_frames_are_ignored(self):
+        guard = FrameSequenceGuard()
+
+        self.assertEqual(guard.accept(100, 4000), (True, True))
+        self.assertEqual(guard.accept(100, 4000), (False, False))
+        self.assertEqual(guard.accept(99, 4000), (False, False))
+        self.assertEqual(guard.accept(101, 4000), (True, False))
+
+    def test_new_race_epoch_accepts_restarted_frame_ids(self):
+        guard = FrameSequenceGuard()
+        guard.accept(500, 4000)
+
+        self.assertEqual(guard.accept(1, 9000), (True, True))
+        self.assertEqual(guard.accept(2, 9000), (True, False))
 
 
 if __name__ == "__main__":
