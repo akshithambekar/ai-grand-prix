@@ -62,7 +62,7 @@ non-finite actions, clamps normalized input, and requires explicit command permi
 
 ### Observation
 
-The policy consumes the normalized 38-value `state_v2` vector:
+The policy consumes the normalized 38-value `state_v3` vector:
 
 ```text
 detected
@@ -72,7 +72,8 @@ local_position_ned[3], local_velocity_ned[3]
 sin/cos(roll, pitch, yaw)
 body_rates[3], body_acceleration[3]
 track_geometry_valid
-active_gate_body_position[3], active_gate_body_normal[3]
+active_gate_plane_distance, active_gate_lateral, active_gate_vertical
+active_gate_body_normal[3]
 gate_width, gate_height
 previous_action[4]
 ```
@@ -81,7 +82,8 @@ Centroids are mapped to `[-1, 1]`; area uses normalized log image area. Position
 velocity, rates, acceleration, gate-relative position, and dimensions use fixed scales of
 `100 m`, `20 m/s`, `5 rad/s`, `20 m/s^2`, `50 m`, and `10 m`. Missing state groups are
 zero only with their validity mask cleared. Odometry in `MAV_FRAME_LOCAL_NED` is preferred;
-fresh local position and attitude are fallbacks. NED gate vectors are rotated into body FRD.
+fresh local position and attitude are fallbacks. Gate position is transformed into the
+gate's own coordinate frame, so vehicle rotation alone cannot improve opening alignment.
 
 ## Reward and episodes
 
@@ -89,17 +91,22 @@ Reward components:
 
 ```text
 -0.01  each 100 ms step
-+20.0  each gate-index increment
++50.0  each gate-index increment
 +50.0  course completion
--20.0  environment or severe gate collision
+-100.0 environment collision
+-75.0  severe gate collision, inversion, tumbling, divergence, or out-of-bounds
+-30.0  stuck termination
+-20.0  gate or episode timeout
+-15.0  gate lost with physical geometry unavailable
 -2.0   non-terminal gate contact
-+/-0.5 maximum true gate-distance progress (visual potential fallback)
-up to -0.1 lateral/vertical gate-alignment penalty
++/-0.5 maximum gate-plane approach progress, discounted by alignment
++/-0.25 maximum gate-plane alignment improvement
 ```
 
-With valid track geometry, dense reward uses reduction in true active-gate distance and a
-bounded gate-opening alignment penalty. If track geometry is absent, it falls back to the
-change in this visual potential:
+With valid track geometry, dense reward uses gate-plane approach progress multiplied by
+alignment quality. Alignment itself is change-based: improving it pays, worsening it costs,
+and stationary misalignment accumulates no penalty. If track geometry is absent, reward
+falls back to the change in this visual potential:
 
 ```python
 error = sqrt(center_x**2 + center_y**2)
@@ -111,6 +118,10 @@ if error < 0.4:
 It applies only across consecutive detections with the same track and gate. Detection
 loss, target changes, gate passage, and reset clear the temporal potential. Resetting
 reward state never changes PPO weights.
+
+Visual detection is an approach aid. When physical gate geometry remains valid, segmentation
+loss near the opening does not terminate an episode; race-status gate advancement is the
+authoritative pass signal.
 
 `EpisodeManager` is the sole reset authority. It handles reset command `31000`, reset
 epoch detection, simulator countdown, the four-second command embargo, re-arming, and a
@@ -144,19 +155,20 @@ PPO(
     gae_lambda=0.95,
     clip_range=0.2,
     ent_coef=0.005,
-    policy_kwargs={"net_arch": [128, 128]},
+    policy_kwargs={"net_arch": [128, 128], "log_std_init": -1.0},
 )
 ```
 
 Curriculum stages require 1, 2, 3, then all gates. Advance after deterministic evaluation
 reaches at least 80% success over ten episodes. Evaluation pauses training and reuses the
 same simulator. Models, checkpoints, Monitor output, episode metrics, and TensorBoard logs
-are written under `artifacts/state_v2/`. Former 19-value policies are intentionally
-incompatible and are rejected before evaluation or resume.
+are written under `artifacts/state_v3/`. `state_v2` and former 19-value policies are
+intentionally incompatible and are rejected before evaluation or resume.
 
 The training terminal uses a responsive Rich dashboard. It shows total, value, policy,
 entropy, KL, and clipping losses after each PPO update; current and accumulated reward
-components; rollout progress; simulator target state; episode totals; and reset reasons.
+components; rollout progress; simulator target state; episode totals; cumulative reset
+reasons; and rolling success, duration, and reset reasons for the last 50 episodes.
 Narrow or short terminals use a folded layout, while CSV and TensorBoard retain the complete
 history independently of terminal size.
 

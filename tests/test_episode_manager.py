@@ -189,6 +189,29 @@ class EpisodeManagerTests(unittest.TestCase):
         event = self.manager.update(now=12.3)
         self.assertEqual(event.reason, "stuck")
 
+    def test_visual_loss_does_not_end_episode_while_physical_gate_is_valid(self):
+        self.start_episode()
+        self.data["active_gate_state"] = {"valid": True, "distance_m": 2.0}
+        self.data["gate"] = frame(3, 5.0, detected=False)
+        self.manager.update(now=5.0)
+        self.data["gate"] = frame(4, 8.0, detected=False)
+
+        event = self.manager.update(now=8.0)
+
+        self.assertFalse(event.episode_ended)
+        self.assertEqual(event.phase, EpisodePhase.ACTIVE)
+
+    def test_visual_loss_ends_episode_when_physical_gate_is_also_invalid(self):
+        self.start_episode()
+        self.data["active_gate_state"] = {"valid": False}
+        self.data["gate"] = frame(3, 5.0, detected=False)
+        self.manager.update(now=5.0)
+        self.data["gate"] = frame(4, 7.1, detected=False)
+
+        event = self.manager.update(now=7.1)
+
+        self.assertEqual(event.reason, "gate_lost")
+
     def test_odometry_reset_counter_can_confirm_reset_epoch(self):
         self.data["odometry"] = {"reset_counter": 1}
         self.manager.request_reset(now=0.0)

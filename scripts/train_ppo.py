@@ -17,12 +17,14 @@ from dotenv import load_dotenv
 
 from controls.episode_manager import EpisodeConfig
 from controls.model_compat import stamp_model_schema, validate_model_schema
+from controls.observation import OBSERVATION_SCHEMA
 from controls.runtime import create_official_env
 from controls.training_dashboard import TrainingDashboardCallback
 
 
-ARTIFACTS = REPO_ROOT / "artifacts" / "state_v2"
+ARTIFACTS = REPO_ROOT / "artifacts" / OBSERVATION_SCHEMA
 PPO_DEVICE = "cpu"
+PPO_POLICY_KWARGS = {"net_arch": [128, 128], "log_std_init": -1.0}
 EPISODE_FIELDS = [
     "episode_id", "episode_duration_s", "episode_steps", "gates_passed",
     "highest_gate_index", "reset_reason", "collision_count", "detection_rate",
@@ -32,6 +34,21 @@ EPISODE_FIELDS = [
     "gate_distance_change_m", "position_min_ned", "position_max_ned",
     "mean_vision_range_error_m",
 ]
+
+
+def training_episode_config(target_gates):
+    """Give the first-gate curriculum enough time to align and recover visually."""
+    values = {"target_gate_count": target_gates or None}
+    if target_gates == 1:
+        values.update(
+            gate_timeout_s=25.0,
+            no_detection_timeout_s=5.0,
+            stuck_grace_s=10.0,
+            stuck_hold_s=5.0,
+            divergence_distance_m=8.0,
+            divergence_hold_s=2.0,
+        )
+    return EpisodeConfig(**values)
 
 
 class EpisodeCSVCallback(BaseCallback):
@@ -153,9 +170,7 @@ def main():
         sim_ip=args.sim_ip,
         sim_port=args.sim_port,
         vision_port=args.vision_port,
-        episode_config=EpisodeConfig(
-            target_gate_count=args.target_gates or None,
-        ),
+        episode_config=training_episode_config(args.target_gates),
     )
     monitored = Monitor(env, filename=str(ARTIFACTS / "monitor.csv"))
     episode_csv = EpisodeCSVCallback(ARTIFACTS / "episodes.csv")
@@ -191,7 +206,7 @@ def main():
                 gae_lambda=0.95,
                 clip_range=0.2,
                 ent_coef=0.005,
-                policy_kwargs={"net_arch": [128, 128]},
+                policy_kwargs=PPO_POLICY_KWARGS,
                 tensorboard_log=str(ARTIFACTS / "tensorboard"),
                 seed=args.seed,
                 verbose=0,

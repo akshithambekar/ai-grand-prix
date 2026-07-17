@@ -20,8 +20,8 @@ class TrainingDashboardTests(unittest.TestCase):
         dashboard.started_at = time.monotonic()
         dashboard.step_reward = 1.25
         dashboard.active_episode_reward = 4.5
-        dashboard.step_components = {"gate_pass": 20.0, "step": -0.01}
-        dashboard.episode_components.update({"gate_pass": 20.0, "step": -0.4})
+        dashboard.step_components = {"gate_pass": 50.0, "step": -0.01}
+        dashboard.episode_components.update({"gate_pass": 50.0, "step": -0.4})
         dashboard.info = {
             "episode_id": 3,
             "active_gate_index": 1,
@@ -47,6 +47,10 @@ class TrainingDashboardTests(unittest.TestCase):
         )
         dashboard = TrainingDashboardCallback(512, 5000, console=console)
         dashboard.started_at = time.monotonic()
+        dashboard.recent_outcomes.extend([
+            {"reason": "environment_collision", "duration_s": 2.0, "success": False},
+            {"reason": "curriculum_complete", "duration_s": 8.0, "success": True},
+        ])
 
         console.print(dashboard.render(width=120, height=30))
         output = console.export_text()
@@ -54,6 +58,8 @@ class TrainingDashboardTests(unittest.TestCase):
         self.assertIn("Optimization", output)
         self.assertIn("Reward breakdown", output)
         self.assertIn("Run and simulator", output)
+        self.assertIn("success=50%", output)
+        self.assertIn("environment_collision", output)
 
 
 if __name__ == "__main__":

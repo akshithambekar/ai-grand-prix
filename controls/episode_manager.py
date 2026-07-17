@@ -244,14 +244,21 @@ class EpisodeManager:
             return state_reason
 
         gate = self.data.get("gate") or {}
+        physical_gate = self.data.get("active_gate_state") or {}
         frame_id = gate.get("frame_id")
         if frame_id is not None and frame_id != self._last_frame_id:
             self._last_frame_id = frame_id
             self._last_frame_at = now
-            if gate.get("detected", False):
+            # Near the gate, segmentation naturally fragments or leaves the frame.
+            # Physical track geometry remains authoritative until race status confirms
+            # the pass, so vision loss alone must not terminate that crossing attempt.
+            if gate.get("detected", False) or physical_gate.get("valid", False):
                 self._no_detection_since = None
             elif self._no_detection_since is None:
                 self._no_detection_since = now
+
+        if physical_gate.get("valid", False):
+            self._no_detection_since = None
 
         if self._last_frame_at is not None and now - self._last_frame_at >= self.config.vision_timeout_s:
             return "vision_stream_stall"

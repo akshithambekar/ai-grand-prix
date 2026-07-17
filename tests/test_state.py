@@ -82,6 +82,29 @@ class VehicleStateTests(unittest.TestCase):
         self.assertAlmostEqual(gate["relative_position_body"][0], 10.0, places=5)
         self.assertAlmostEqual(gate["relative_position_body"][1], 0.0, places=5)
         self.assertAlmostEqual(gate["distance_m"], 10.0)
+        self.assertAlmostEqual(gate["plane_distance_m"], 0.0)
+        self.assertAlmostEqual(gate["lateral_m"], -10.0)
+
+    def test_gate_plane_alignment_is_independent_of_vehicle_yaw(self):
+        alignments = []
+        for yaw in (0.0, math.pi / 2.0):
+            data = {
+                "vehicle_state": {
+                    "valid": True, "position_ned": (0.0, 1.0, 0.5),
+                    "quaternion_wxyz": quaternion_from_euler(0.0, 0.0, yaw),
+                },
+                "race_status": {"active_gate_index": 0},
+                "track": {"track_geometry_valid": True, "gates": {0: {
+                    "gate_id": 0, "position_ned": (10.0, 0.0, 0.0),
+                    "quaternion_wxyz": (1.0, 0.0, 0.0, 0.0),
+                    "width_m": 2.0, "height_m": 2.0,
+                }}},
+            }
+            gate = derive_active_gate_state(data)
+            alignments.append((
+                gate["plane_distance_m"], gate["lateral_m"], gate["vertical_m"],
+            ))
+        self.assertEqual(alignments[0], alignments[1])
 
     def test_inverse_rotation_round_trip(self):
         q = quaternion_from_euler(0.3, -0.2, 1.1)

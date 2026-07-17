@@ -195,8 +195,11 @@ def derive_active_gate_state(data):
         "valid": False,
         "gate_id": gate_index,
         "relative_position_body": None,
+        "relative_position_gate": None,
         "gate_normal_body": None,
         "distance_m": None,
+        "plane_distance_m": None,
+        "signed_plane_distance_m": None,
         "lateral_m": None,
         "vertical_m": None,
         "width_m": None,
@@ -221,6 +224,8 @@ def derive_active_gate_state(data):
 
     relative_ned = tuple(gate_position[i] - vehicle_position[i] for i in range(3))
     relative_body = inverse_rotate_vector(vehicle_q, relative_ned)
+    vehicle_from_gate_ned = tuple(-item for item in relative_ned)
+    relative_gate = inverse_rotate_vector(gate_q, vehicle_from_gate_ned)
     normal_ned = rotate_vector(gate_q, (1.0, 0.0, 0.0))
     toward_vehicle = tuple(vehicle_position[i] - gate_position[i] for i in range(3))
     if sum(normal_ned[i] * toward_vehicle[i] for i in range(3)) < 0.0:
@@ -232,10 +237,13 @@ def derive_active_gate_state(data):
         "gate_id": gate.get("gate_id", gate_index),
         "relative_position_ned": relative_ned,
         "relative_position_body": relative_body,
+        "relative_position_gate": relative_gate,
         "gate_normal_body": normal_body,
         "distance_m": distance,
-        "lateral_m": relative_body[1],
-        "vertical_m": relative_body[2],
+        "plane_distance_m": abs(relative_gate[0]),
+        "signed_plane_distance_m": relative_gate[0],
+        "lateral_m": relative_gate[1],
+        "vertical_m": relative_gate[2],
         "width_m": width,
         "height_m": height,
     }

@@ -19,18 +19,15 @@ class RewardCalculator:
         gamma=0.995,
         rate_slew_weight=0.02,
         thrust_slew_weight=0.005,
-        alignment_weight=0.20,
-        alignment_progress_weight=0.25,
+        alignment_progress_weight=1.0,
     ):
         self.gamma = gamma
         self.rate_slew_weight = float(rate_slew_weight)
         self.thrust_slew_weight = float(thrust_slew_weight)
-        self.alignment_weight = float(alignment_weight)
         self.alignment_progress_weight = float(alignment_progress_weight)
         if min(
             self.rate_slew_weight,
             self.thrust_slew_weight,
-            self.alignment_weight,
             self.alignment_progress_weight,
         ) < 0.0:
             raise ValueError("reward weights must be non-negative")
@@ -46,9 +43,11 @@ class RewardCalculator:
         self._previous_potential = None
         self._previous_physical_gate_id = None
         self._previous_distance_m = None
+        self._previous_plane_distance_m = None
         self._previous_alignment_error = None
         self._previous_action = self._action(observation)
         self._reference_down_m = self._vehicle_down(data)
+        self._previous_altitude_loss_m = 0.0
         if observation is not None:
             self._set_potential_state(data, observation)
 
@@ -70,12 +69,13 @@ class RewardCalculator:
         if gate_index is not None and self._previous_gate_index is not None:
             increment = max(0, int(gate_index) - int(self._previous_gate_index))
         if increment:
-            components["gate_pass"] = 20.0 * increment
+            components["gate_pass"] = 50.0 * increment
 
         active_gate = self._mapping(data.get("active_gate_state"))
         physical_valid = bool(active_gate.get("valid"))
         physical_gate_id = active_gate.get("gate_id")
         distance = self._finite(active_gate.get("distance_m")) if physical_valid else None
+        plane_distance = self._plane_distance(active_gate) if physical_valid else None
         same_physical_target = (
             distance is not None
             and self._previous_distance_m is not None
@@ -83,26 +83,27 @@ class RewardCalculator:
             and gate_index == self._previous_gate_index
         )
         if same_physical_target:
+            progress_distance = plane_distance if plane_distance is not None else distance
+            previous_progress_distance = (
+                self._previous_plane_distance_m
+                if plane_distance is not None and self._previous_plane_distance_m is not None
+                else self._previous_distance_m
+            )
             raw_progress = float(np.clip(
-                self._previous_distance_m - distance, -0.5, 0.5
+                previous_progress_distance - progress_distance, -0.5, 0.5
             ))
             alignment_error = self._physical_alignment_error(active_gate)
             if alignment_error is not None:
-                # Approaching quickly only pays when the vehicle is lined up with the
-                # opening. Moving away remains fully negative at every alignment.
                 alignment_quality = math.exp(-3.0 * alignment_error * alignment_error)
-                components["position_progress"] = (
+                components["aligned_approach"] = (
                     raw_progress * alignment_quality if raw_progress > 0.0 else raw_progress
-                )
-                components["gate_alignment"] = -self.alignment_weight * float(
-                    np.clip(alignment_error, 0.0, 2.0)
                 )
                 if self._previous_alignment_error is not None:
                     components["alignment_progress"] = self.alignment_progress_weight * float(
-                        np.clip(self._previous_alignment_error - alignment_error, -0.5, 0.5)
+                        np.clip(self._previous_alignment_error - alignment_error, -0.25, 0.25)
                     )
             else:
-                components["position_progress"] = raw_progress
+                components["aligned_approach"] = raw_progress
 
         vehicle = self._mapping(data.get("vehicle_state"))
         if vehicle.get("valid"):
@@ -110,22 +111,24 @@ class RewardCalculator:
             euler = self._vector(vehicle.get("euler"), 3)
             position = self._vector(vehicle.get("position_ned"), 3)
             if velocity is not None:
-                # LOCAL_NED uses positive-down velocity. Only unsafe descent is
-                # penalized; horizontal/total speed never appears in the reward.
-                descent_rate = max(0.0, velocity[2] - 0.25)
-                components["descent_stability"] = -0.05 * float(
+                descent_rate = max(0.0, velocity[2] - 0.5)
+                components["descent_stability"] = -0.02 * float(
                     np.clip(descent_rate, 0.0, 3.0)
                 )
             if euler is not None:
-                attitude_error = (euler[0] / 0.5) ** 2 + (euler[1] / 0.5) ** 2
-                components["attitude_stability"] = -0.05 * float(
+                safe_angle = math.radians(25.0)
+                roll_excess = max(0.0, abs(euler[0]) - safe_angle)
+                pitch_excess = max(0.0, abs(euler[1]) - safe_angle)
+                attitude_error = (roll_excess / 0.5) ** 2 + (pitch_excess / 0.5) ** 2
+                components["attitude_stability"] = -0.02 * float(
                     np.clip(attitude_error, 0.0, 2.0)
                 )
             if position is not None and self._reference_down_m is not None:
                 altitude_loss = max(0.0, position[2] - self._reference_down_m - 0.25)
-                components["altitude_stability"] = -0.10 * float(
-                    np.clip(altitude_loss / 2.0, 0.0, 1.0)
+                components["altitude_progress"] = 0.5 * float(
+                    np.clip(self._previous_altitude_loss_m - altitude_loss, -0.25, 0.25)
                 )
+                self._previous_altitude_loss_m = altitude_loss
 
         detected = bool(observation[0] > 0.5)
         track_id = gate.get("track_id")
@@ -145,26 +148,31 @@ class RewardCalculator:
         if sequence > self._collision_sequence:
             collision_id = collision.get("collision_id")
             threat = int(collision.get("threat_level", 0) or 0)
-            if collision_id == 1002 or (collision_id == 1001 and threat >= 2):
-                components["collision"] = -20.0
+            if collision_id == 1002:
+                components["collision"] = -100.0
+            elif collision_id == 1001 and threat >= 2:
+                components["collision"] = -75.0
             elif collision_id == 1001:
                 components["gate_contact"] = -2.0
             self._collision_sequence = sequence
 
         if termination_reason == "course_complete":
             components["course_complete"] = 50.0
-        elif termination_reason in {
-            "inverted", "tumbling", "position_divergence", "out_of_bounds", "stuck",
-        }:
+        elif termination_reason in {"inverted", "tumbling", "position_divergence", "out_of_bounds"}:
+            components["terminal_failure"] = -75.0
+        elif termination_reason == "stuck":
+            components["terminal_failure"] = -30.0
+        elif termination_reason in {"gate_timeout", "episode_timeout"}:
             components["terminal_failure"] = -20.0
-        elif termination_reason in {"gate_timeout", "episode_timeout", "gate_lost"}:
-            components["terminal_failure"] = -10.0
+        elif termination_reason == "gate_lost":
+            components["terminal_failure"] = -15.0
 
         self._previous_gate_index = gate_index
         self._previous_track_id = track_id if detected else None
         self._previous_potential = potential
         self._previous_physical_gate_id = physical_gate_id if physical_valid else None
         self._previous_distance_m = distance
+        self._previous_plane_distance_m = plane_distance
         self._previous_alignment_error = (
             self._physical_alignment_error(active_gate) if physical_valid else None
         )
@@ -179,6 +187,7 @@ class RewardCalculator:
         if active_gate.get("valid"):
             self._previous_physical_gate_id = active_gate.get("gate_id")
             self._previous_distance_m = self._finite(active_gate.get("distance_m"))
+            self._previous_plane_distance_m = self._plane_distance(active_gate)
             self._previous_alignment_error = self._physical_alignment_error(active_gate)
         gate = self._mapping(data.get("gate"))
         if observation[0] <= 0.5:
@@ -213,6 +222,11 @@ class RewardCalculator:
         if None in (width, height, lateral, vertical) or width <= 0.0 or height <= 0.0:
             return None
         return math.hypot(abs(lateral) / max(width / 2.0, 0.1), abs(vertical) / max(height / 2.0, 0.1))
+
+    @classmethod
+    def _plane_distance(cls, active_gate):
+        plane_distance = cls._finite(active_gate.get("plane_distance_m"))
+        return plane_distance if plane_distance is not None else cls._finite(active_gate.get("distance_m"))
 
     @classmethod
     def _vehicle_down(cls, data):

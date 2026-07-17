@@ -6,8 +6,8 @@ Automated episode-termination conditions for training, plus what to measure per 
 
 `mavlink_rx.py` publishes heartbeat/armed state, ATTITUDE, LOCAL_POSITION_NED, ODOMETRY,
 HIGHRES_IMU, track geometry, race status, actuator output, and collision snapshots into
-`shared_data`. `controls/state.py` derives canonical `vehicle_state` and body-relative
-`active_gate_state` snapshots with freshness and validity metadata.
+`shared_data`. `controls/state.py` derives canonical `vehicle_state` plus body-relative and
+gate-plane `active_gate_state` snapshots with freshness and validity metadata.
 
 The reset/countdown lifecycle is implemented in `controls/episode_manager.py` and wired into `controls/main.py`.
 
@@ -93,9 +93,10 @@ As written it will fire spuriously in three legitimate situations:
 
 So it will punish the drone for succeeding.
 
-Gate it behind a grace period that is suppressed for roughly 0.5s after `active_gate_index` advances, and require K consecutive no-detect frames rather than one.
-The README notes the detector holds a gate down to about 26px of side, so genuine loss of sight is a real signal.
-It is just worth not confusing it with the two frames after a clean pass.
+The implemented rule suppresses gate-loss termination while physical active-gate geometry is
+valid. Segmentation remains useful during approach, while physical geometry carries the
+close-range crossing until `active_gate_index` confirms passage. When both sources are absent,
+the configured consecutive no-detection timeout still terminates the episode.
 
 ## What to measure
 

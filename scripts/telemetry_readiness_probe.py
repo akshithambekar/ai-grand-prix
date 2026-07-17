@@ -1,4 +1,4 @@
-"""Validate restored state_v2 telemetry before training or evaluation."""
+"""Validate restored state_v3 telemetry before training or evaluation."""
 
 import argparse
 import json

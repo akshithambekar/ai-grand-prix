@@ -74,6 +74,7 @@ class TrainingDashboardCallback(BaseCallback):
         self.episodes = 0
         self.gates_passed = 0
         self.reset_reasons = Counter()
+        self.recent_outcomes = deque(maxlen=50)
 
     def _on_training_start(self):
         rollout_size = self.model.n_steps * self.training_env.num_envs
@@ -111,6 +112,11 @@ class TrainingDashboardCallback(BaseCallback):
             self.gates_passed += int(self.info.get("gates_passed") or 0)
             reason = str(self.info.get("reset_reason") or "unknown")
             self.reset_reasons[reason] += 1
+            self.recent_outcomes.append({
+                "reason": reason,
+                "duration_s": self.info.get("episode_duration_s"),
+                "success": reason in {"curriculum_complete", "course_complete"},
+            })
             episode = self.info.get("episode", {})
             final_reward = float(episode.get("r", self.active_episode_reward))
             self.last_episode_reward = final_reward
@@ -181,6 +187,7 @@ class TrainingDashboardCallback(BaseCallback):
         episode_breakdown = _folded_pairs(self.episode_components)
         last_episode_breakdown = _folded_pairs(self.last_episode_components)
         last_reward = _format_number(self.last_episode_reward, 3)
+        recent = self._recent_summary()
         lines = [
             Text(
                 f"{train['steps']}  {train['progress']}  {train['rate']}  "
@@ -206,6 +213,7 @@ class TrainingDashboardCallback(BaseCallback):
                 f"detected={self.info.get('detected', '-')}",
                 overflow="fold",
             ),
+            Text(f"Recent  {recent}", style="yellow", overflow="fold"),
         ]
         return Panel(
             Group(*lines),
@@ -264,7 +272,8 @@ class TrainingDashboardCallback(BaseCallback):
         mean_reward = sum(self.mean_rewards) / len(self.mean_rewards) if self.mean_rewards else None
         footer = Text(
             f"episodes={self.episodes}  reward100={_format_number(mean_reward, 2)}  "
-            f"resets={dict(self.reset_reasons) or '{}'}",
+            f"resets={dict(self.reset_reasons) or '{}'}\n"
+            f"last50={self._recent_summary()}",
             style="yellow",
             overflow="fold",
         )
@@ -273,4 +282,20 @@ class TrainingDashboardCallback(BaseCallback):
             title="AI Grand Prix PPO Training",
             border_style="bright_blue",
             padding=(0, 1),
+        )
+
+    def _recent_summary(self):
+        if not self.recent_outcomes:
+            return "waiting"
+        reasons = Counter(item["reason"] for item in self.recent_outcomes)
+        successes = sum(bool(item["success"]) for item in self.recent_outcomes)
+        durations = [
+            float(item["duration_s"])
+            for item in self.recent_outcomes
+            if item["duration_s"] is not None
+        ]
+        mean_duration = sum(durations) / len(durations) if durations else None
+        return (
+            f"n={len(self.recent_outcomes)} success={successes / len(self.recent_outcomes):.0%} "
+            f"duration={_format_number(mean_duration, 1)}s reasons={dict(reasons)}"
         )

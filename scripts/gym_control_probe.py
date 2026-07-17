@@ -16,7 +16,7 @@ from controls.episode_manager import EpisodeConfig, EpisodePhase
 from controls.runtime import create_official_env
 
 
-DEFAULT_LOG_DIR = REPO_ROOT / "artifacts" / "state_v2" / "gym_control_probe"
+DEFAULT_LOG_DIR = REPO_ROOT / "artifacts" / "state_v3" / "gym_control_probe"
 
 
 def parse_args():

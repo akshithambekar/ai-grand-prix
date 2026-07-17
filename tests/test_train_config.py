@@ -2,12 +2,15 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.train_ppo import PPO_DEVICE, parse_args
+from scripts.train_ppo import PPO_DEVICE, PPO_POLICY_KWARGS, parse_args, training_episode_config
 
 
 class TrainingConfigurationTests(unittest.TestCase):
     def test_ppo_device_is_cpu(self):
         self.assertEqual(PPO_DEVICE, "cpu")
+
+    def test_initial_exploration_standard_deviation_is_reduced(self):
+        self.assertEqual(PPO_POLICY_KWARGS["log_std_init"], -1.0)
 
     def test_environment_defaults_are_loaded(self):
         values = {
@@ -49,6 +52,21 @@ class TrainingConfigurationTests(unittest.TestCase):
         self.assertFalse(args.execute)
         self.assertEqual(args.target_gates, 0)
         self.assertFalse(args.dashboard)
+
+    def test_first_gate_curriculum_uses_permissive_exploration_limits(self):
+        config = training_episode_config(1)
+        self.assertEqual(config.target_gate_count, 1)
+        self.assertEqual(config.gate_timeout_s, 25.0)
+        self.assertEqual(config.no_detection_timeout_s, 5.0)
+        self.assertEqual(config.stuck_grace_s + config.stuck_hold_s, 15.0)
+        self.assertEqual(config.divergence_distance_m, 8.0)
+        self.assertEqual(config.divergence_hold_s, 2.0)
+
+    def test_full_course_keeps_standard_safety_limits(self):
+        config = training_episode_config(0)
+        self.assertIsNone(config.target_gate_count)
+        self.assertEqual(config.gate_timeout_s, 15.0)
+        self.assertEqual(config.no_detection_timeout_s, 2.0)
 
 
 if __name__ == "__main__":

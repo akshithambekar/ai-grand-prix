@@ -6,7 +6,7 @@ import numpy as np
 from controls.state import derive_active_gate_state, derive_vehicle_state, finite_vector
 
 
-OBSERVATION_SCHEMA = "state_v2"
+OBSERVATION_SCHEMA = "state_v3"
 OBSERVATION_FIELDS = (
     "vision_detected", "vision_center_x", "vision_center_y", "vision_log_area",
     "tracking_confidence", "tracking_missed_frames",
@@ -17,7 +17,7 @@ OBSERVATION_FIELDS = (
     "body_rate_roll", "body_rate_pitch", "body_rate_yaw",
     "acceleration_x", "acceleration_y", "acceleration_z",
     "track_geometry_valid",
-    "gate_body_x", "gate_body_y", "gate_body_z",
+    "gate_plane_distance", "gate_lateral", "gate_vertical",
     "gate_normal_body_x", "gate_normal_body_y", "gate_normal_body_z",
     "gate_width", "gate_height",
     "previous_roll", "previous_pitch", "previous_yaw", "previous_thrust",
@@ -34,7 +34,7 @@ MISSED_FRAME_SCALE = 10.0
 
 
 class ObservationEncoder:
-    """Convert asynchronous telemetry snapshots into the state_v2 policy vector."""
+    """Convert asynchronous telemetry snapshots into the state_v3 policy vector."""
 
     def reset(self):
         pass
@@ -57,7 +57,9 @@ class ObservationEncoder:
         euler = self._vector(vehicle.get("euler"), vehicle_valid)
         rates = self._vector(vehicle.get("body_rates"), vehicle_valid)
         acceleration = self._vector(vehicle.get("acceleration_body"), vehicle_valid)
-        relative = self._vector(active_gate.get("relative_position_body"), track_valid)
+        relative = self._vector(active_gate.get("relative_position_gate"), track_valid)
+        if track_valid:
+            relative = (abs(relative[0]), relative[1], relative[2])
         normal = self._vector(active_gate.get("gate_normal_body"), track_valid)
 
         action = np.asarray(previous_action, dtype=np.float32)
@@ -93,7 +95,7 @@ class ObservationEncoder:
         ], dtype=np.float32)
         observation = np.clip(observation, -1.0, 1.0)
         if observation.shape != (OBSERVATION_SIZE,) or not np.isfinite(observation).all():
-            raise ValueError("state_v2 observation encoder produced invalid output")
+            raise ValueError("state_v3 observation encoder produced invalid output")
         return observation
 
     @staticmethod

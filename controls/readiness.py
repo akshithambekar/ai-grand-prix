@@ -34,5 +34,5 @@ def wait_for_vehicle_state(data, timeout_s=10.0, poll_s=0.02):
         time.sleep(poll_s)
     report = telemetry_report(data)
     raise TimeoutError(
-        f"state_v2 telemetry readiness failed after {timeout_s:.1f}s: {report}"
+        f"state_v3 telemetry readiness failed after {timeout_s:.1f}s: {report}"
     )

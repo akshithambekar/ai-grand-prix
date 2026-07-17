@@ -32,6 +32,7 @@ def snapshot(cx=320, cy=180, area=10_000, detected=True, track_id=1, gate_index=
         "active_gate_state": {
             "valid": True,
             "relative_position_body": (25.0, -5.0, 2.5),
+            "relative_position_gate": (25.0, -5.0, 2.5),
             "gate_normal_body": (-1.0, 0.0, 0.0),
             "width_m": 2.0,
             "height_m": 2.0,

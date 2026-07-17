@@ -38,7 +38,8 @@ uv run python scripts\telemetry_readiness_probe.py
 
 The readiness probe requires a fresh canonical vehicle state. Missing or zeroed track
 geometry is reported and uses vision fallback rather than aborting. The policy interface is
-`state_v2` with 38 observations; older 19-value checkpoints cannot be resumed or evaluated.
+`state_v3` with 38 observations. It uses gate-plane distance and alignment coordinates;
+older `state_v2` and 19-value checkpoints cannot be resumed or evaluated.
 
 Validate the Gym pipeline with the proven first-gate sequence:
 
@@ -58,6 +59,10 @@ Run the first 512-step PPO smoke rollout:
 uv run python scripts/train_ppo.py --execute --target-gates 1 --total-timesteps 512
 ```
 
+The one-gate training curriculum uses a 25-second gate timeout, five-second detection-loss
+timeout, 15-second combined stuck window, and a more permissive divergence window. Full-course
+training and deterministic evaluation retain the standard safety limits.
+
 The MLP PPO policy explicitly uses `device="cpu"`, which is the Stable-Baselines3
 recommended backend for this policy architecture.
 
@@ -76,8 +81,11 @@ seed, resume checkpoint, and dashboard settings. Command-line arguments override
 Evaluate a saved model for ten deterministic episodes after pausing training:
 
 ```powershell
-uv run python scripts\evaluate_ppo.py artifacts\state_v2\models\ppo_aigp_final.zip --execute --target-gates 1 --episodes 10
+uv run python scripts\evaluate_ppo.py artifacts\state_v3\models\ppo_aigp_final.zip --execute --target-gates 1 --episodes 10
 ```
+
+Evaluation writes both an episode summary and a per-step trace under `artifacts\state_v3`.
+The trace includes actions, gate-plane alignment, vehicle state, and every reward component.
 
 See `ARCHITECTURE.md` for the action, observation, reward, reset, and curriculum design.
 

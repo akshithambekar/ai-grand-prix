@@ -134,8 +134,8 @@ class AIGPEnvTests(unittest.TestCase):
         self.assertTrue(terminated)
         self.assertFalse(truncated)
         self.assertEqual(info["termination_reason"], "curriculum_complete")
-        self.assertEqual(info["reward_components"]["gate_pass"], 20.0)
-        self.assertGreater(reward, 19.0)
+        self.assertEqual(info["reward_components"]["gate_pass"], 50.0)
+        self.assertGreater(reward, 49.0)
         self.assertEqual(controller.commands, [])
 
     def test_collision_terminates_and_requires_reset(self):

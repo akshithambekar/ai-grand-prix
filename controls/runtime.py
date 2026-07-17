@@ -31,9 +31,9 @@ def create_official_env(
         shutdown_components(components)
         raise
     if report["track_geometry_valid"]:
-        print(f"state_v2 telemetry ready: {report}", flush=True)
+        print(f"state_v3 telemetry ready: {report}", flush=True)
     else:
-        print(f"state_v2 telemetry ready; track geometry unavailable, using vision fallback: {report}", flush=True)
+        print(f"state_v3 telemetry ready; track geometry unavailable, using vision fallback: {report}", flush=True)
     controller = components["controller"]
     episodes = EpisodeManager(
         data,
