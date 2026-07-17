@@ -111,6 +111,27 @@ class EpisodeManagerTests(unittest.TestCase):
         self.assertEqual(event.gates_passed, 1)
         self.assertEqual(event.phase, EpisodePhase.ACTIVE)
 
+    def test_curriculum_gate_target_ends_episode(self):
+        self.manager = EpisodeManager(
+            self.data,
+            lambda: setattr(self, "resets", self.resets + 1),
+            lambda: setattr(self, "arms", self.arms + 1),
+            EpisodeConfig(target_gate_count=1),
+        )
+        self.start_episode()
+        self.data["race_status"] = race(
+            sim_ms=5000,
+            start_ms=4000,
+            gate=1,
+            received_at_s=5.0,
+        )
+
+        event = self.manager.update(now=5.0)
+
+        self.assertTrue(event.episode_ended)
+        self.assertEqual(event.reason, "curriculum_complete")
+        self.assertEqual(event.gates_passed, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

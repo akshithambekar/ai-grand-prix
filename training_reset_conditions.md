@@ -125,6 +125,13 @@ There also needs to be a way to detect that a reset has *completed* before recor
 Otherwise transitions that straddle the boundary get logged, which are physically impossible and will poison the buffer.
 Watching for `active_gate_index` to return to 0 is the obvious candidate, assuming the reset does that.
 
-## Open work
+## Current implementation
 
-The remaining work is to add episode metrics, target continuity, the conservative visual servo, and the Gymnasium wrapper. The manager currently handles the core reset handshake and initial termination conditions; tumbling, inversion, range divergence, and stuck-state triggers should be added after their thresholds are validated against motion logs.
+Target continuity, episode metrics, direct-action Gymnasium wrapping, curriculum completion,
+reward calculation, and SB3 training/evaluation entry points are implemented. The live Gym
+uses this `EpisodeManager` directly, including the four-second post-reset command embargo.
+
+Tumbling, inversion, range divergence, and stuck-state triggers remain deferred until their
+thresholds are validated against official-simulator motion logs. Existing gate timeout,
+collision, gate-loss, vision-stall, episode-timeout, and course-completion conditions provide
+the initial training boundary.

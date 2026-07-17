@@ -8,27 +8,59 @@ Install [uv](https://docs.astral.sh/uv/) and sync the locked environment:
 uv sync
 ```
 
-Run the MAVLink client with:
+Run the reset-managed hover client with:
 
 ```bash
-uv run python PyAIPilotExample-v2/main.py
+uv run python controls/main.py
 ```
 
 Run the standalone reset listener with:
 
 ```bash
-uv run python PyAIPilotExample-v2/reset_hotkey.py
+uv run python scripts/reset_hotkey.py
 ```
 
 On Windows, keep the terminal window focused while pressing `K`.
 
 Dependencies are declared in `pyproject.toml` and pinned in `uv.lock`.
 
+## Gymnasium and PPO on the official simulator
+
+Live Gym and PPO runs require the official simulator and this repository to run on the
+same Windows machine. Use one live script at a time because MAVLink port `14550` and
+vision port `5600` each have one receiver.
+
+Validate the Gym pipeline with the proven first-gate sequence:
+
+```powershell
+uv run python scripts\gym_control_probe.py --execute
+```
+
+Run two bounded random-action reset cycles:
+
+```powershell
+uv run python scripts\random_action_probe.py --execute --episodes 2
+```
+
+Run the first 512-step PPO smoke rollout:
+
+```powershell
+uv run python scripts\train_ppo.py --execute --target-gates 1 --total-timesteps 512
+```
+
+Evaluate a saved model for ten deterministic episodes after pausing training:
+
+```powershell
+uv run python scripts\evaluate_ppo.py artifacts\models\ppo_aigp_final.zip --execute --target-gates 1 --episodes 10
+```
+
+See `ARCHITECTURE.md` for the action, observation, reward, reset, and curriculum design.
+
 # Progress tracker
 
 ## Vision: red gate detection
 
-Component: `PyAIPilotExample-v2/vision_rx.py`
+Component: `controls/vision_rx.py`
 
 Status: implemented and working on a real frame, but uncalibrated.
 Bearing is trustworthy now.

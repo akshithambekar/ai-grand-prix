@@ -1,167 +1,134 @@
+import math
 import time
+from dataclasses import dataclass
+from typing import Iterable
 
+import numpy as np
 from pymavlink import mavutil
 
-# --------------------------------------------------------------------------------------
-# RESET COMMAND
+
 MAVLINK_CMD_SIM_RESET = 31000
+RATES_ATTITUDE_MASK = mavutil.mavlink.ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE
 
-# --------------------------------------------------------------------------------------
-# MOTOR CONTROLS
-# --------------------------------------------------------------------------------------
 
-MOTOR_FRONT_LEFT = 0
-MOTOR_FRONT_RIGHT = 1
-MOTOR_BACK_LEFT = 0
-MOTOR_BACK_RIGHT = 0
+@dataclass(frozen=True)
+class FlightCommand:
+    roll_rate: float
+    pitch_rate: float
+    yaw_rate: float
+    thrust: float
 
-def update_motor_control(mavlink_conn, system_boot_ms):
-    motor_rpms = [MOTOR_FRONT_LEFT, MOTOR_FRONT_RIGHT, MOTOR_BACK_LEFT, MOTOR_BACK_RIGHT, 0, 0, 0, 0]
-    mavlink_conn.mav.set_actuator_control_target_send(
-        int(time.time() * 1e6),
-        mavlink_conn.target_system,
-        mavlink_conn.target_component,
-        0,
-        motor_rpms
-    )
 
-# --------------------------------------------------------------------------------------
-# ATTITUDE CONTROLS
-# --------------------------------------------------------------------------------------
-PITCH_RATE = -0.3   # rad/s (negative = pitch forward)
-ROLL_RATE  = 0.0
-YAW_RATE   = 0.0
-THRUST     = 0.6    # 0.0 - 1.0
+class ActionMapper:
+    """Map normalized PPO actions to conservative absolute flight commands."""
 
-RATES_ATTITUDE_MASK = (
-    mavutil.mavlink.ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE
-)
+    ROLL_LIMITS = (-0.20, 0.20)
+    PITCH_LIMITS = (-0.20, 0.15)
+    YAW_LIMITS = (-0.15, 0.15)
+    THRUST_LIMITS = (0.23, 0.30)
 
-def update_attitude_flight_control(mavlink_conn, system_boot_ms):
-    now_ms = int(time.time() * 1000)
+    def map(self, action: Iterable[float]) -> FlightCommand:
+        normalized = self.normalize(action)
+        return FlightCommand(
+            roll_rate=self._map_rate(normalized[0], self.ROLL_LIMITS),
+            pitch_rate=self._map_rate(normalized[1], self.PITCH_LIMITS),
+            yaw_rate=self._map_rate(normalized[2], self.YAW_LIMITS),
+            thrust=self._map_linear(normalized[3], self.THRUST_LIMITS),
+        )
 
-    """
-    Sets a desired vehicle attitude. Used by an external controller to
-    command the vehicle (manual controller or other system).
-    
-    time_boot_ms              : Timestamp (time since system boot). [ms] (type:uint32_t)
-    target_system             : System ID (type:uint8_t)
-    target_component          : Component ID (type:uint8_t)
-    type_mask                 : Bitmap to indicate which dimensions should be ignored by the vehicle. (type:uint8_t, values:ATTITUDE_TARGET_TYPEMASK)
-    q                         : Attitude quaternion (w, x, y, z order, zero-rotation is 1, 0, 0, 0) (type:float)
-    body_roll_rate            : Body roll rate [rad/s] (type:float)
-    body_pitch_rate           : Body pitch rate [rad/s] (type:float)
-    body_yaw_rate             : Body yaw rate [rad/s] (type:float)
-    thrust                    : Collective thrust, normalized to 0 .. 1 (-1 .. 1 for vehicles capable of reverse trust) (type:float)
-    """
-    mavlink_conn.mav.set_attitude_target_send(
-        now_ms - system_boot_ms,
-        mavlink_conn.target_system,
-        mavlink_conn.target_component,
-        RATES_ATTITUDE_MASK,
-        [1, 0, 0, 0],  # dummy quaternion (ignored)
-        ROLL_RATE,
-        PITCH_RATE,
-        YAW_RATE,
-        THRUST
-    )
+    def action_for_command(self, command: FlightCommand) -> np.ndarray:
+        """Inverse mapping used by deterministic live probes."""
+        return np.asarray([
+            self._normalize_rate(command.roll_rate, self.ROLL_LIMITS),
+            self._normalize_rate(command.pitch_rate, self.PITCH_LIMITS),
+            self._normalize_rate(command.yaw_rate, self.YAW_LIMITS),
+            self._normalize_linear(command.thrust, self.THRUST_LIMITS),
+        ], dtype=np.float32)
 
-# --------------------------------------------------------------------------------------
-# POSITION CONTROLS
-# --------------------------------------------------------------------------------------
-VELOCITY_POSITION_MASK = (
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_X_IGNORE |
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_Y_IGNORE |
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_Z_IGNORE |
+    @staticmethod
+    def normalize(action: Iterable[float]) -> np.ndarray:
+        values = np.asarray(action, dtype=np.float32)
+        if values.shape != (4,):
+            raise ValueError(f"action must have shape (4,), got {values.shape}")
+        if not np.isfinite(values).all():
+            raise ValueError("action must contain only finite values")
+        return np.clip(values, -1.0, 1.0)
 
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_AX_IGNORE |
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_AY_IGNORE |
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_AZ_IGNORE |
+    @staticmethod
+    def _map_rate(value: float, limits: tuple[float, float]) -> float:
+        low, high = limits
+        return float(value * (high if value >= 0 else -low))
 
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_IGNORE |
-        mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE
-)
+    @staticmethod
+    def _normalize_rate(value: float, limits: tuple[float, float]) -> float:
+        low, high = limits
+        clamped = min(max(float(value), low), high)
+        return clamped / (high if clamped >= 0 else -low)
 
-def update_position_flight_control(mavlink_conn, system_boot_ms):
-    now_ms = int(time.time() * 1000)
+    @staticmethod
+    def _map_linear(value: float, limits: tuple[float, float]) -> float:
+        low, high = limits
+        return float(low + 0.5 * (value + 1.0) * (high - low))
 
-    """
-    Sets a desired vehicle position in a local north-east-down coordinate
-    frame. Used by an external controller to command the vehicle
-    (manual controller or other system).
+    @staticmethod
+    def _normalize_linear(value: float, limits: tuple[float, float]) -> float:
+        low, high = limits
+        clamped = min(max(float(value), low), high)
+        return 2.0 * (clamped - low) / (high - low) - 1.0
 
-    time_boot_ms              : Timestamp (time since system boot). [ms] (type:uint32_t)
-    target_system             : System ID (type:uint8_t)
-    target_component          : Component ID (type:uint8_t)
-    coordinate_frame          : Valid options are: MAV_FRAME_LOCAL_NED = 1, MAV_FRAME_LOCAL_OFFSET_NED = 7, MAV_FRAME_BODY_NED = 8, MAV_FRAME_BODY_OFFSET_NED = 9 (type:uint8_t, values:MAV_FRAME)
-    type_mask                 : Bitmap to indicate which dimensions should be ignored by the vehicle. (type:uint16_t, values:POSITION_TARGET_TYPEMASK)
-    x                         : X Position in NED frame [m] (type:float)
-    y                         : Y Position in NED frame [m] (type:float)
-    z                         : Z Position in NED frame (note, altitude is negative in NED) [m] (type:float)
-    vx                        : X velocity in NED frame [m/s] (type:float)
-    vy                        : Y velocity in NED frame [m/s] (type:float)
-    vz                        : Z velocity in NED frame [m/s] (type:float)
-    afx                       : X acceleration or force (if bit 10 of type_mask is set) in NED frame in meter / s^2 or N [m/s/s] (type:float)
-    afy                       : Y acceleration or force (if bit 10 of type_mask is set) in NED frame in meter / s^2 or N [m/s/s] (type:float)
-    afz                       : Z acceleration or force (if bit 10 of type_mask is set) in NED frame in meter / s^2 or N [m/s/s] (type:float)
-    yaw                       : yaw setpoint [rad] (type:float)
-    yaw_rate                  : yaw rate setpoint [rad/s] (type:float)
-    """
-    mavlink_conn.mav.set_position_target_local_ned_send(
-        now_ms - system_boot_ms,
-        mavlink_conn.target_system,
-        mavlink_conn.target_component,
-        mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-        VELOCITY_POSITION_MASK,
-        0.0, 0, 0.0,    # ignored position NED
-        2.0, 0.0, 0.0,  # Vel - 2 m/s forward
-        0.0, 0, 0.0,    # ignored acceleration
-        0,              # ignored yaw
-        0.0             # ignored yaw rate
-    )
-
-# --------------------------------------------------------------------------------------
-# Control Loop
-# --------------------------------------------------------------------------------------
-
-CONTROL_HZ = 250
 
 class Controller:
     def __init__(self, sim_conn, data, system_boot_ms):
         self.sim_conn = sim_conn
         self.data = data
         self.system_boot_ms = system_boot_ms
+        self.action_mapper = ActionMapper()
 
-    def update(self):
-        # send automated targets to sim flight controller
-        #update_attitude_flight_control(self.sim_conn, self.system_boot_ms)
-        # alternatively one of
-        # update_position_flight_control(self.sim_conn, self.system_boot_ms)
-        update_motor_control(self.sim_conn, self.system_boot_ms)
+    def send_normalized_action(self, action, command_allowed):
+        command = self.action_mapper.map(action)
+        return self.send_flight_command(command, command_allowed)
 
-        time.sleep(1.0 / CONTROL_HZ)
+    def send_flight_command(self, command: FlightCommand, command_allowed: bool):
+        if not command_allowed:
+            return False
+        values = (
+            command.roll_rate,
+            command.pitch_rate,
+            command.yaw_rate,
+            command.thrust,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("flight command must contain only finite values")
 
-    # -------------------------------
-    # Arm the drone
-    # -------------------------------
+        now_ms = int(time.time() * 1000)
+        self.sim_conn.mav.set_attitude_target_send(
+            now_ms - self.system_boot_ms,
+            self.sim_conn.target_system,
+            self.sim_conn.target_component,
+            RATES_ATTITUDE_MASK,
+            [1, 0, 0, 0],
+            command.roll_rate,
+            command.pitch_rate,
+            command.yaw_rate,
+            min(max(command.thrust, 0.0), 1.0),
+        )
+        return True
+
     def arm(self):
         self.sim_conn.mav.command_long_send(
             self.sim_conn.target_system,
             self.sim_conn.target_component,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0,
-            1,  # arm
-            0, 0, 0, 0, 0, 0
+            1,
+            0, 0, 0, 0, 0, 0,
         )
 
-    # -------------------------------
-    # Reset sim
-    # -------------------------------
     def send_sim_reset_command(self):
         self.sim_conn.mav.command_long_send(
             self.sim_conn.target_system,
             self.sim_conn.target_component,
             MAVLINK_CMD_SIM_RESET,
-            0,  # confirmation
-            0, 0, 0, 0, 0, 0, 0
+            0,
+            0, 0, 0, 0, 0, 0, 0,
         )

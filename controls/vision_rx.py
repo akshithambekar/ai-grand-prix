@@ -185,14 +185,9 @@ class GateTracker:
                 self.missed_frames = 0
             else:
                 self.missed_frames += 1
-                if self.missed_frames > self.max_missed_frames:
-                    self.reset()
-                    selected = usable[0] if usable else None
-                    if selected is not None:
-                        self.track_id += 1
-                        self.current = selected
-                        switched = True
-                        switch_reason = "association_lost"
+                # Keep the active-gate lock until telemetry advances the gate index.
+                # Selecting the largest remaining contour here can redirect control to
+                # a later gate during the short delay between crossing and telemetry.
 
         confidence = 0.0
         if self.current is not None:
@@ -293,8 +288,10 @@ class FrameSequenceGuard:
 
 class VisionRX:
 
-    def __init__(self, data):
+    def __init__(self, data, bind_ip=SIM_SERVER_UDP_IP, bind_port=SIM_SERVER_UDP_PORT):
         self.data = data
+        self.bind_ip = bind_ip
+        self.bind_port = bind_port
         self.thread = threading.Thread(
             target=self._vision_loop,
             daemon=False
@@ -322,7 +319,7 @@ class VisionRX:
         frames = {}  # frame_id -> received associated frame data
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind((SIM_SERVER_UDP_IP, SIM_SERVER_UDP_PORT))
+        sock.bind((self.bind_ip, self.bind_port))
         sock.settimeout(0.2)
         print("Listening for camera frames...")
 

@@ -1,10 +1,17 @@
 from pymavlink import mavutil
-from timesync import TimeSync
-from vision_rx import VisionRX
-from mavlink_rx import MAVLinkRX
-from controller import Controller
+from controls.controller import Controller
+from controls.mavlink_rx import MAVLinkRX
+from controls.timesync import TimeSync
+from controls.vision_rx import VisionRX
 
-def setup_components(shared_data, system_boot_ms, server_ip, server_udp_port):
+def setup_components(
+    shared_data,
+    system_boot_ms,
+    server_ip,
+    server_udp_port,
+    vision_ip="0.0.0.0",
+    vision_port=5600,
+):
     # -------------------------------
     # Mavlink Connection
     # -------------------------------
@@ -24,12 +31,12 @@ def setup_components(shared_data, system_boot_ms, server_ip, server_udp_port):
     # Timesync request Loop
     # -------------------------------
     print("Setting up Timesync loop...", flush=True)
-    ts_loop = TimeSync(sim_conn, shared_data)
+    ts_loop = TimeSync.create_timesync(sim_conn, shared_data)
 
     # -------------------------------
     # Connect Vision receiver
     # -------------------------------
-    vision_rx = VisionRX(shared_data)
+    vision_rx = VisionRX(shared_data, bind_ip=vision_ip, bind_port=vision_port)
 
     # -------------------------------
     # Main control loop
@@ -43,3 +50,16 @@ def setup_components(shared_data, system_boot_ms, server_ip, server_udp_port):
         'sim_conn': sim_conn,
         'controller': controller
     }
+
+
+def shutdown_components(components):
+    for name in ("ts_loop", "mavlink_rx", "vision_rx"):
+        component = components.get(name)
+        if component is None:
+            continue
+        thread = component.get_thread_for_join()
+        if thread is not None:
+            thread.join(timeout=1.0)
+    connection = components.get("sim_conn")
+    if connection is not None:
+        connection.close()

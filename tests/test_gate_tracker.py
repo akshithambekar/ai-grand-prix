@@ -60,6 +60,33 @@ class GateTrackerTests(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual(state["track_id"], track_id)
 
+    def test_unrelated_candidate_cannot_replace_lost_active_gate(self):
+        _, state = self.tracker.update([gate(960, 540, 300)], FRAME_SHAPE, 0)
+        track_id = state["track_id"]
+
+        for _ in range(self.tracker.max_missed_frames + 2):
+            selected, state = self.tracker.update(
+                [gate(1100, 700, 40)], FRAME_SHAPE, 0
+            )
+
+        self.assertIsNone(selected)
+        self.assertEqual(state["track_id"], track_id)
+        self.assertFalse(state["track_switched"])
+
+    def test_lost_active_gate_can_reassociate_after_extended_dropout(self):
+        _, state = self.tracker.update([gate(960, 540, 100)], FRAME_SHAPE, 0)
+        track_id = state["track_id"]
+
+        for _ in range(self.tracker.max_missed_frames + 2):
+            selected, _ = self.tracker.update([], FRAME_SHAPE, 0)
+            self.assertIsNone(selected)
+
+        selected, state = self.tracker.update([gate(965, 543, 110)], FRAME_SHAPE, 0)
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(state["track_id"], track_id)
+        self.assertFalse(state["track_switched"])
+
     def test_off_center_edge_fragment_is_rejected(self):
         self.tracker.update([gate(960, 540, 100)], FRAME_SHAPE, 0)
         fragment = gate(30, 500, 100, area=20_000)

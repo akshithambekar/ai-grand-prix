@@ -23,6 +23,7 @@ class EpisodeConfig:
     episode_timeout_s: float = 120.0
     arm_retry_s: float = 1.0
     post_reset_command_delay_s: float = 4.0
+    target_gate_count: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,12 @@ class EpisodeManager:
         status = self._race_status() or {}
         if status.get("race_finish_time_ns", -1) >= 0:
             return "course_complete"
+
+        if (
+            self.config.target_gate_count is not None
+            and self.gates_passed >= self.config.target_gate_count
+        ):
+            return "curriculum_complete"
 
         if self._episode_started_at is not None and now - self._episode_started_at >= self.config.episode_timeout_s:
             return "episode_timeout"
