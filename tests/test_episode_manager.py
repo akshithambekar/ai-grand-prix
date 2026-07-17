@@ -62,6 +62,27 @@ class EpisodeManagerTests(unittest.TestCase):
         self.assertTrue(event.command_allowed)
         self.assertTrue(event.episode_started)
 
+    def test_four_second_post_reset_delay_is_always_enforced(self):
+        self.data["armed"] = False
+        self.manager.request_reset(now=0.0)
+        self.manager.update(now=0.1)
+
+        # Even if the simulator reports its countdown finished early, arming and
+        # flight-control permission remain blocked until four seconds after reset.
+        self.data["race_status"] = race(
+            sim_ms=3000,
+            start_ms=3000,
+            received_at_s=3.0,
+        )
+        event = self.manager.update(now=3.0)
+        self.assertEqual(event.phase, EpisodePhase.WAITING_FOR_ARM)
+        event = self.manager.update(now=3.99)
+        self.assertFalse(event.command_allowed)
+        self.assertEqual(self.arms, 0)
+
+        self.manager.update(now=4.0)
+        self.assertEqual(self.arms, 1)
+
     def test_environment_collision_ends_episode_and_requests_reset(self):
         self.start_episode()
         self.data["collision"] = {

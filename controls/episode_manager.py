@@ -22,6 +22,7 @@ class EpisodeConfig:
     pass_grace_s: float = 0.5
     episode_timeout_s: float = 120.0
     arm_retry_s: float = 1.0
+    post_reset_command_delay_s: float = 4.0
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,8 @@ class EpisodeManager:
             return self._event()
 
         if self.phase == EpisodePhase.WAITING_FOR_ARM:
+            if now - self._reset_sent_at < self.config.post_reset_command_delay_s:
+                return self._event()
             if not self._armed():
                 if self._last_arm_at is None or now - self._last_arm_at >= self.config.arm_retry_s:
                     self.send_arm()

@@ -171,6 +171,10 @@ During `COUNTDOWN`:
 - clear the target tracker, frame deltas, previous action, reward potential, timers, and collision deduplication state;
 - begin the episode only after the countdown completes and a fresh camera frame arrives.
 
+Independently enforce a minimum four-second wall-clock delay after every reset before
+arming or sending any flight-control command. The next episode starts only when both
+the simulator countdown and this safety delay have completed.
+
 If race status exposes a future `race_start_boot_time_ms`, transition when `sim_boot_time_ms >= race_start_boot_time_ms`. Also require the start timestamp to belong to the new reset epoch rather than a stale UDP packet.
 
 ## Limited-simulator training
