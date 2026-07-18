@@ -94,6 +94,13 @@ HUD_REGIONS_NORM = []
 DEBUG_DUMP_DIR = os.environ.get("VISION_DEBUG_DIR")
 DEBUG_DUMP_EVERY_N = int(os.environ.get("VISION_DEBUG_EVERY_N", "15"))
 
+# frame_id increments monotonically per frame from the sim. A frame missing even one UDP
+# chunk never reaches its completeness check, so without this bound its buffer would sit
+# in `frames` forever, once per every packet loss over a run. ~1s of backlog at 30 FPS is
+# far more slack than a frame that far behind could ever need: it is unrecoverable and
+# stale for control by then regardless.
+MAX_PENDING_FRAME_BACKLOG = 30
+
 # --------------------------------------------------------------------------------------
 # TARGET TRACKING
 # --------------------------------------------------------------------------------------
@@ -340,6 +347,12 @@ class VisionRX:
                     "size": jpeg_size,
                     "time": sim_time_ns
                 }
+                stale_ids = [
+                    fid for fid in frames
+                    if fid <= frame_id - MAX_PENDING_FRAME_BACKLOG
+                ]
+                for fid in stale_ids:
+                    del frames[fid]
 
             frames[frame_id]["chunks"][chunk_id] = payload
 
