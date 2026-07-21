@@ -16,6 +16,7 @@ from scripts.evidence import (
     cyan_fraction,
     json_safe,
     map_manual_keys,
+    slew_values,
     update_throttle,
 )
 
@@ -61,7 +62,17 @@ class ManualMappingTests(unittest.TestCase):
 
     def test_motor_mixer_is_bounded_and_directional(self):
         forward = map_manual_keys({"w"}, "motor", self.config).values
-        self.assertEqual(forward, (0.45, 0.45, 0.55, 0.55))
+        self.assertEqual(forward, (0.5, 0.5, 0.55, 0.55))
+        backward = map_manual_keys({"s"}, "motor", self.config).values
+        self.assertEqual(backward, (0.55, 0.55, 0.5, 0.5))
+        left = map_manual_keys({"a"}, "motor", self.config).values
+        self.assertEqual(left, (0.5, 0.55, 0.5, 0.55))
+        right = map_manual_keys({"d"}, "motor", self.config).values
+        self.assertEqual(right, (0.55, 0.5, 0.55, 0.5))
+        self.assertEqual(
+            map_manual_keys({"w", "s", "a", "d"}, "motor", self.config).values,
+            (0.5, 0.5, 0.5, 0.5),
+        )
         extreme = ManualControlConfig(motor_hover=0.99, motor_thrust_step=0.2)
         self.assertEqual(map_manual_keys({"q"}, "motor", extreme).values, (1.0, 1.0, 1.0, 1.0))
 
@@ -70,6 +81,13 @@ class ManualMappingTests(unittest.TestCase):
         self.assertAlmostEqual(update_throttle(0.3, set(), 0.1, 0.2, 0.5), 0.3)
         self.assertAlmostEqual(update_throttle(0.3, {"e"}, 0.1, 0.2, 0.5), 0.28)
         self.assertEqual(update_throttle(0.49, {"q"}, 0.1, 0.2, 0.5), 0.5)
+
+    def test_motor_slew_smoothly_reverses_direction(self):
+        forward = (0.3, 0.3, 0.35, 0.35)
+        backward_target = (0.35, 0.35, 0.3, 0.3)
+        step = slew_values(forward, backward_target, 0.1, 0.2)
+        for actual, expected in zip(step, (0.32, 0.32, 0.33, 0.33), strict=True):
+            self.assertAlmostEqual(actual, expected)
 
 
 class EvidenceTests(unittest.TestCase):

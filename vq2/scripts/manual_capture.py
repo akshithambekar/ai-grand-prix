@@ -25,6 +25,7 @@ from scripts.evidence import (  # noqa: E402
     TelemetryRecorder,
     create_run_dir,
     map_manual_keys,
+    slew_values,
     update_throttle,
     write_summary,
 )
@@ -44,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sim-port", type=int, default=14550)
     parser.add_argument("--vision-ip", default="0.0.0.0")
     parser.add_argument("--vision-port", type=int, default=5600)
-    parser.add_argument("--mode", choices=("attitude", "velocity", "motor"), default="attitude")
+    parser.add_argument("--mode", choices=("attitude", "velocity", "motor"), default="motor")
     parser.add_argument("--control-hz", type=float, default=50.0)
     parser.add_argument("--reset-settle-seconds", type=float, default=4.0)
     parser.add_argument("--initial-thrust", type=float, default=0.0)
@@ -55,13 +56,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--forward-speed", type=float, default=1.0)
     parser.add_argument("--lateral-speed", type=float, default=1.0)
     parser.add_argument("--vertical-speed", type=float, default=0.6)
-    parser.add_argument(
-        "--motor-hover",
-        type=float,
-        help="Required for active raw-motor control; measure it with the contract probe first.",
-    )
-    parser.add_argument("--motor-thrust-step", type=float, default=0.08)
-    parser.add_argument("--motor-tilt-step", type=float, default=0.04)
+    parser.add_argument("--motor-tilt-step", type=float, default=0.025)
+    parser.add_argument("--motor-slew-per-second", type=float, default=0.30)
     parser.add_argument("--output-root", type=Path, default=VQ2_ROOT / "artifacts" / "manual")
     parser.add_argument(
         "--reset-before-run", action=argparse.BooleanOptionalAction, default=True
@@ -71,12 +67,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
-    if min(args.control_hz, args.reset_settle_seconds, args.thrust_ramp_per_second) <= 0:
+    if min(
+        args.control_hz,
+        args.reset_settle_seconds,
+        args.thrust_ramp_per_second,
+        args.motor_slew_per_second,
+    ) <= 0:
         parser.error("control rate and reset settle time must be positive")
     if not 0.0 <= args.initial_thrust <= args.max_thrust <= 1.0:
         parser.error("thrust must satisfy 0 <= initial <= maximum <= 1")
-    if args.execute and args.mode == "motor" and args.motor_hover is None:
-        parser.error("active motor mode requires --motor-hover")
     return args
 
 
@@ -97,8 +96,8 @@ def main() -> None:
         forward_speed=args.forward_speed,
         lateral_speed=args.lateral_speed,
         vertical_speed=args.vertical_speed,
-        motor_hover=args.motor_hover if args.motor_hover is not None else 0.0,
-        motor_thrust_step=args.motor_thrust_step,
+        motor_hover=args.initial_thrust,
+        motor_thrust_step=0.0,
         motor_tilt_step=args.motor_tilt_step,
     )
     writer.write("session_start", tool="manual_capture", arguments=vars(args), config=asdict(config))
@@ -108,6 +107,7 @@ def main() -> None:
     commands_sent = 0
     previous_keys: set[str] = set()
     manual_thrust = args.initial_thrust
+    motor_outputs = (args.initial_thrust,) * 4
     connected = False
     try:
         heartbeat = connection.wait_heartbeat(timeout=15)
@@ -163,6 +163,7 @@ def main() -> None:
                 sender.reset()
                 reset_count += 1
                 manual_thrust = args.initial_thrust
+                motor_outputs = (args.initial_thrust,) * 4
                 arm_sent = False
                 command_allowed_at = now + args.reset_settle_seconds
                 writer.write("sim_reset", source="manual_key")
@@ -175,7 +176,7 @@ def main() -> None:
                 print("Armed; manual commands live.", flush=True)
 
             sent = bool(args.execute and arm_sent and now >= command_allowed_at)
-            if args.mode == "attitude":
+            if args.mode in {"attitude", "motor"}:
                 if sent:
                     manual_thrust = update_throttle(
                         manual_thrust,
@@ -184,8 +185,25 @@ def main() -> None:
                         args.thrust_ramp_per_second,
                         args.max_thrust,
                     )
+            if args.mode == "attitude":
                 rates = map_manual_keys(pressed & {"w", "a", "s", "d"}, args.mode, config)
                 command = FlightCommand("attitude", (*rates.values[:3], manual_thrust))
+            elif args.mode == "motor":
+                motor_config = ManualControlConfig(
+                    motor_hover=manual_thrust,
+                    motor_thrust_step=0.0,
+                    motor_tilt_step=args.motor_tilt_step,
+                )
+                target = map_manual_keys(
+                    pressed & {"w", "a", "s", "d"}, "motor", motor_config
+                )
+                motor_outputs = slew_values(
+                    motor_outputs,
+                    target.values,
+                    elapsed_s,
+                    args.motor_slew_per_second,
+                )
+                command = FlightCommand("motor", motor_outputs)
             else:
                 command = map_manual_keys(pressed & CONTROL_KEYS, args.mode, config)
             if sent:
@@ -197,7 +215,10 @@ def main() -> None:
                 keys=sorted(pressed & CONTROL_KEYS),
                 sent=sent,
                 command=asdict(command),
-                manual_thrust=manual_thrust if args.mode == "attitude" else None,
+                collective_thrust=(
+                    manual_thrust if args.mode in {"attitude", "motor"} else None
+                ),
+                motor_targets=target.values if args.mode == "motor" else None,
             )
             next_tick += 1.0 / args.control_hz
             tick += 1

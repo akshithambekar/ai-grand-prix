@@ -62,6 +62,17 @@ limits. Hold `Q` to ramp the persistent throttle upward and `E` to ramp it downw
 `0.20` thrust units per second. Releasing both keys retains the selected throttle; it does
 not initiate takeoff on its own. Reset returns throttle to zero.
 
+Direct per-motor capture is the default manual mode:
+
+```powershell
+uv run python scripts\manual_capture.py --execute
+```
+
+Q/E ramp the persistent collective for all motors. W adds thrust to both rear motors, S to
+both front motors, A to both right motors, and D to both left motors. Opposite keys cancel.
+Motor targets use a `0.025` directional increment and slew at `0.30` thrust units per second,
+so changing direction smoothly removes the old pair's increment while adding the new pair's.
+
 Controls:
 
 | Key | Motion |

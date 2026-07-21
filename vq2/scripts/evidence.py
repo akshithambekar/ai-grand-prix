@@ -433,13 +433,15 @@ def map_manual_keys(
         )
     if mode == "motor":
         base = config.motor_hover + up * config.motor_thrust_step
-        roll = right * config.motor_tilt_step
-        pitch = forward * config.motor_tilt_step
+        front = max(-forward, 0.0) * config.motor_tilt_step
+        back = max(forward, 0.0) * config.motor_tilt_step
+        left = max(right, 0.0) * config.motor_tilt_step
+        right_side = max(-right, 0.0) * config.motor_tilt_step
         motors = (
-            base + roll - pitch,
-            base - roll - pitch,
-            base + roll + pitch,
-            base - roll + pitch,
+            base + front + left,
+            base + front + right_side,
+            base + back + left,
+            base + back + right_side,
         )
         return FlightCommand(mode, tuple(_clamp(value, 0.0, 1.0) for value in motors))
     raise ValueError(f"unsupported control mode: {mode}")
@@ -461,6 +463,22 @@ def update_throttle(
     direction = float("q" in pressed) - float("e" in pressed)
     elapsed_s = _clamp(elapsed_s, 0.0, 0.1)
     return _clamp(current + direction * ramp_per_second * elapsed_s, 0.0, maximum)
+
+
+def slew_values(
+    current: Iterable[float],
+    target: Iterable[float],
+    elapsed_s: float,
+    units_per_second: float,
+) -> tuple[float, ...]:
+    """Move each motor toward its target without discontinuous thrust steps."""
+    elapsed_s = _clamp(elapsed_s, 0.0, 0.1)
+    maximum_delta = max(0.0, float(units_per_second)) * elapsed_s
+    result = []
+    for old, desired in zip(current, target, strict=True):
+        delta = _clamp(float(desired) - float(old), -maximum_delta, maximum_delta)
+        result.append(float(old) + delta)
+    return tuple(result)
 
 
 class CommandSender:
