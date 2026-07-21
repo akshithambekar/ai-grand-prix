@@ -1,0 +1,111 @@
+{
+  "control_mode": "attitude",
+  "disabled_streams_observed": {
+    "ATTITUDE": 0,
+    "LOCAL_POSITION_NED": 0,
+    "ODOMETRY": 0
+  },
+  "event_counts": {
+    "arm": 1,
+    "command": 75,
+    "connected": 1,
+    "frame": 778,
+    "frame_error": 3,
+    "mavlink": 2296,
+    "probe_phase": 3,
+    "race_status": 58,
+    "receiver_ready": 1,
+    "session_start": 1,
+    "sim_reset": 2,
+    "timesync_request": 95
+  },
+  "execute": true,
+  "expected_streams": {
+    "ACTUATOR_OUTPUT_STATUS": true,
+    "ENCAPSULATED_DATA": true,
+    "HEARTBEAT": true,
+    "HIGHRES_IMU": true
+  },
+  "frames": {
+    "cyan_fraction_max": 0.22379774305555555,
+    "cyan_present": true,
+    "decode_failures": 0,
+    "frame_count": 778,
+    "frames_with_cyan": 778
+  },
+  "message_counts": {
+    "ACTUATOR_OUTPUT_STATUS": 1240,
+    "COMMAND_ACK": 2,
+    "ENCAPSULATED_DATA": 58,
+    "HEARTBEAT": 137,
+    "HIGHRES_IMU": 764,
+    "TIMESYNC": 95
+  },
+  "phase_imu": {
+    "bounded_pulse": {
+      "samples": 25,
+      "xacc_max": -0.09830760955810547,
+      "xacc_mean": -0.17433192253112792,
+      "xacc_min": -0.27741289138793945,
+      "xgyro_max": -6.5267086029052734e-06,
+      "xgyro_mean": -2.4637775932205842e-05,
+      "xgyro_min": -5.711732592317276e-05,
+      "yacc_max": 2.1457672119140625e-05,
+      "yacc_mean": 3.70025634765625e-06,
+      "yacc_min": -2.384185791015625e-06,
+      "ygyro_max": 0.2234543412923813,
+      "ygyro_mean": 0.18091739427822176,
+      "ygyro_min": 5.621010495815426e-05,
+      "zacc_max": -16.05211067199707,
+      "zacc_mean": -17.524244766235352,
+      "zacc_min": -18.83504867553711,
+      "zgyro_max": 2.514570951461792e-07,
+      "zgyro_mean": -1.5025580069050192e-08,
+      "zgyro_min": -2.1792948246002197e-07
+    },
+    "neutral_after": {
+      "samples": 25,
+      "xacc_max": -0.27741289138793945,
+      "xacc_mean": -0.5093016147613525,
+      "xacc_min": -0.7894971370697021,
+      "xgyro_max": -7.145572453737259e-07,
+      "xgyro_mean": -2.610683441162109e-06,
+      "xgyro_min": -6.5267086029052734e-06,
+      "yacc_max": 5.9604644775390625e-06,
+      "yacc_mean": 2.231597900390625e-06,
+      "yacc_min": -1.9073486328125e-06,
+      "ygyro_max": 0.19559989869594574,
+      "ygyro_mean": 0.014873743671923876,
+      "ygyro_min": -0.031228503212332726,
+      "zacc_max": -13.580100059509277,
+      "zacc_mean": -14.753858451843263,
+      "zacc_min": -16.05211067199707,
+      "zgyro_max": 1.4883698895573616e-07,
+      "zgyro_mean": -1.539010554552078e-08,
+      "zgyro_min": -1.6513513401150703e-07
+    },
+    "neutral_before": {
+      "samples": 25,
+      "xacc_max": -0.00016355514526367188,
+      "xacc_mean": -0.28433334827423096,
+      "xacc_min": -2.998873710632324,
+      "xgyro_max": 0.007817206904292107,
+      "xgyro_mean": 2.0947255252394824e-05,
+      "xgyro_min": -0.0018626322271302342,
+      "yacc_max": 0.007101535797119141,
+      "yacc_mean": -0.0038189411163330076,
+      "yacc_min": -0.10493695735931396,
+      "ygyro_max": 0.0029769442044198513,
+      "ygyro_mean": -5.0719013961497696e-05,
+      "ygyro_min": -0.008595332503318787,
+      "zacc_max": -7.543833255767822,
+      "zacc_mean": -17.70154302597046,
+      "zacc_min": -20.056812286376953,
+      "zgyro_max": 0.00480474391952157,
+      "zgyro_mean": 0.0001733102695288835,
+      "zgyro_min": -0.00045084627345204353
+    }
+  },
+  "tool": "simulator_contract_probe",
+  "track_data": null
+}
