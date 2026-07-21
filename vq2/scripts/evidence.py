@@ -449,6 +449,20 @@ def _clamp(value: float, low: float, high: float) -> float:
     return min(max(float(value), low), high)
 
 
+def update_throttle(
+    current: float,
+    keys: Iterable[str],
+    elapsed_s: float,
+    ramp_per_second: float,
+    maximum: float,
+) -> float:
+    """Integrate Q/E into a persistent manual throttle setpoint."""
+    pressed = {key.lower() for key in keys}
+    direction = float("q" in pressed) - float("e" in pressed)
+    elapsed_s = _clamp(elapsed_s, 0.0, 0.1)
+    return _clamp(current + direction * ramp_per_second * elapsed_s, 0.0, maximum)
+
+
 class CommandSender:
     def __init__(self, connection):
         self.connection = connection

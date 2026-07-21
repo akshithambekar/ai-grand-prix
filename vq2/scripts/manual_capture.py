@@ -18,12 +18,14 @@ if str(VQ2_ROOT) not in sys.path:
 from scripts.evidence import (  # noqa: E402
     CommandSender,
     EvidenceWriter,
+    FlightCommand,
     FrameRecorder,
     KeyPoller,
     ManualControlConfig,
     TelemetryRecorder,
     create_run_dir,
     map_manual_keys,
+    update_throttle,
     write_summary,
 )
 
@@ -45,8 +47,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("attitude", "velocity", "motor"), default="attitude")
     parser.add_argument("--control-hz", type=float, default=50.0)
     parser.add_argument("--reset-settle-seconds", type=float, default=4.0)
-    parser.add_argument("--hover-thrust", type=float, default=0.42)
-    parser.add_argument("--thrust-step", type=float, default=0.03)
+    parser.add_argument("--initial-thrust", type=float, default=0.0)
+    parser.add_argument("--thrust-ramp-per-second", type=float, default=0.20)
+    parser.add_argument("--max-thrust", type=float, default=0.50)
     parser.add_argument("--roll-rate", type=float, default=0.08)
     parser.add_argument("--pitch-rate", type=float, default=0.08)
     parser.add_argument("--forward-speed", type=float, default=1.0)
@@ -68,8 +71,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
-    if min(args.control_hz, args.reset_settle_seconds) <= 0:
+    if min(args.control_hz, args.reset_settle_seconds, args.thrust_ramp_per_second) <= 0:
         parser.error("control rate and reset settle time must be positive")
+    if not 0.0 <= args.initial_thrust <= args.max_thrust <= 1.0:
+        parser.error("thrust must satisfy 0 <= initial <= maximum <= 1")
     if args.execute and args.mode == "motor" and args.motor_hover is None:
         parser.error("active motor mode requires --motor-hover")
     return args
@@ -85,8 +90,8 @@ def main() -> None:
     sender = CommandSender(connection)
     keys = KeyPoller()
     config = ManualControlConfig(
-        hover_thrust=args.hover_thrust,
-        thrust_step=args.thrust_step,
+        hover_thrust=args.initial_thrust,
+        thrust_step=0.0,
         roll_rate=args.roll_rate,
         pitch_rate=args.pitch_rate,
         forward_speed=args.forward_speed,
@@ -102,6 +107,7 @@ def main() -> None:
     reset_count = 0
     commands_sent = 0
     previous_keys: set[str] = set()
+    manual_thrust = args.initial_thrust
     connected = False
     try:
         heartbeat = connection.wait_heartbeat(timeout=15)
@@ -136,10 +142,13 @@ def main() -> None:
             flush=True,
         )
         next_tick = time.monotonic()
+        previous_tick = next_tick
         tick = 0
         timesync_interval = max(1, round(args.control_hz / 10.0))
         while True:
             now = time.monotonic()
+            elapsed_s = now - previous_tick
+            previous_tick = now
             if tick % timesync_interval == 0:
                 client_time_ns = sender.send_timesync()
                 writer.write("timesync_request", client_time_ns=client_time_ns)
@@ -153,6 +162,7 @@ def main() -> None:
             if reset_pressed and args.execute:
                 sender.reset()
                 reset_count += 1
+                manual_thrust = args.initial_thrust
                 arm_sent = False
                 command_allowed_at = now + args.reset_settle_seconds
                 writer.write("sim_reset", source="manual_key")
@@ -164,8 +174,20 @@ def main() -> None:
                 writer.write("arm", source="manual_capture")
                 print("Armed; manual commands live.", flush=True)
 
-            command = map_manual_keys(pressed & CONTROL_KEYS, args.mode, config)
             sent = bool(args.execute and arm_sent and now >= command_allowed_at)
+            if args.mode == "attitude":
+                if sent:
+                    manual_thrust = update_throttle(
+                        manual_thrust,
+                        pressed,
+                        elapsed_s,
+                        args.thrust_ramp_per_second,
+                        args.max_thrust,
+                    )
+                rates = map_manual_keys(pressed & {"w", "a", "s", "d"}, args.mode, config)
+                command = FlightCommand("attitude", (*rates.values[:3], manual_thrust))
+            else:
+                command = map_manual_keys(pressed & CONTROL_KEYS, args.mode, config)
             if sent:
                 sender.send(command)
                 commands_sent += 1
@@ -175,6 +197,7 @@ def main() -> None:
                 keys=sorted(pressed & CONTROL_KEYS),
                 sent=sent,
                 command=asdict(command),
+                manual_thrust=manual_thrust if args.mode == "attitude" else None,
             )
             next_tick += 1.0 / args.control_hz
             tick += 1

@@ -16,6 +16,7 @@ from scripts.evidence import (
     cyan_fraction,
     json_safe,
     map_manual_keys,
+    update_throttle,
 )
 
 
@@ -63,6 +64,12 @@ class ManualMappingTests(unittest.TestCase):
         self.assertEqual(forward, (0.45, 0.45, 0.55, 0.55))
         extreme = ManualControlConfig(motor_hover=0.99, motor_thrust_step=0.2)
         self.assertEqual(map_manual_keys({"q"}, "motor", extreme).values, (1.0, 1.0, 1.0, 1.0))
+
+    def test_manual_throttle_ramps_persists_and_clamps(self):
+        self.assertAlmostEqual(update_throttle(0.0, {"q"}, 0.1, 0.2, 0.5), 0.02)
+        self.assertAlmostEqual(update_throttle(0.3, set(), 0.1, 0.2, 0.5), 0.3)
+        self.assertAlmostEqual(update_throttle(0.3, {"e"}, 0.1, 0.2, 0.5), 0.28)
+        self.assertEqual(update_throttle(0.49, {"q"}, 0.1, 0.2, 0.5), 0.5)
 
 
 class EvidenceTests(unittest.TestCase):

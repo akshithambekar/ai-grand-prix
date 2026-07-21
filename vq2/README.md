@@ -57,8 +57,10 @@ After selecting the working command interface:
 uv run python scripts\manual_capture.py --execute --mode attitude
 ```
 
-The manual attitude defaults use the same calibrated `0.42` neutral thrust and conservative
-`0.08 rad/s` roll/pitch limits. `Q` and `E` adjust thrust by `0.03` while held.
+Manual attitude control starts at zero thrust and uses conservative `0.08 rad/s` roll/pitch
+limits. Hold `Q` to ramp the persistent throttle upward and `E` to ramp it downward at
+`0.20` thrust units per second. Releasing both keys retains the selected throttle; it does
+not initiate takeoff on its own. Reset returns throttle to zero.
 
 Controls:
 
