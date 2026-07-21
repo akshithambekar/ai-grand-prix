@@ -387,10 +387,10 @@ class FrameRecorder:
 
 @dataclass(frozen=True)
 class ManualControlConfig:
-    hover_thrust: float = 0.6
-    thrust_step: float = 0.08
-    roll_rate: float = 0.25
-    pitch_rate: float = 0.25
+    hover_thrust: float = 0.42
+    thrust_step: float = 0.03
+    roll_rate: float = 0.08
+    pitch_rate: float = 0.08
     forward_speed: float = 1.0
     lateral_speed: float = 1.0
     vertical_speed: float = 0.6

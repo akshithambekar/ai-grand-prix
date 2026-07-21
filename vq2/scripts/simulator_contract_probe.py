@@ -46,12 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vision-port", type=int, default=5600)
     parser.add_argument("--passive-seconds", type=float, default=8.0)
     parser.add_argument("--reset-settle-seconds", type=float, default=4.0)
-    parser.add_argument("--phase-seconds", type=float, default=1.5)
+    parser.add_argument("--phase-seconds", type=float, default=0.5)
     parser.add_argument("--control-hz", type=float, default=50.0)
     parser.add_argument("--mode", choices=("attitude", "velocity", "motor"), default="attitude")
-    parser.add_argument("--hover-thrust", type=float, default=0.6)
-    parser.add_argument("--thrust-step", type=float, default=0.08)
-    parser.add_argument("--rate", type=float, default=0.20)
+    parser.add_argument("--hover-thrust", type=float, default=0.42)
+    parser.add_argument("--thrust-step", type=float, default=0.03)
+    parser.add_argument("--rate", type=float, default=0.08)
     parser.add_argument("--speed", type=float, default=0.75)
     parser.add_argument(
         "--motor-hover",

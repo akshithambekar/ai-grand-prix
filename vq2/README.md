@@ -34,8 +34,9 @@ uv run python scripts\simulator_contract_probe.py --execute --mode attitude
 
 The active probe resets the simulator, waits through the countdown, arms, sends a short
 forward-pitch pulse between two neutral phases, then resets. The summary contains IMU
-ranges for each phase. If the attitude command produces no response, test body-velocity
-control:
+ranges for each phase. Its attitude defaults are calibrated from the successful contract
+run: `0.42` neutral thrust, `0.08 rad/s` pitch pulse, and `0.5s` phases. If the attitude
+command produces no response, test body-velocity control:
 
 ```powershell
 uv run python scripts\simulator_contract_probe.py --execute --mode velocity
@@ -55,6 +56,9 @@ After selecting the working command interface:
 ```powershell
 uv run python scripts\manual_capture.py --execute --mode attitude
 ```
+
+The manual attitude defaults use the same calibrated `0.42` neutral thrust and conservative
+`0.08 rad/s` roll/pitch limits. `Q` and `E` adjust thrust by `0.03` while held.
 
 Controls:
 
