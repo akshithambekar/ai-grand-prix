@@ -1,0 +1,42 @@
+{
+  "control_mode": null,
+  "disabled_streams_observed": {
+    "ATTITUDE": 0,
+    "LOCAL_POSITION_NED": 0,
+    "ODOMETRY": 0
+  },
+  "event_counts": {
+    "connected": 1,
+    "frame": 450,
+    "frame_error": 7,
+    "mavlink": 1518,
+    "race_status": 35,
+    "receiver_ready": 1,
+    "session_start": 1,
+    "timesync_request": 80
+  },
+  "execute": false,
+  "expected_streams": {
+    "ACTUATOR_OUTPUT_STATUS": true,
+    "ENCAPSULATED_DATA": true,
+    "HEARTBEAT": true,
+    "HIGHRES_IMU": true
+  },
+  "frames": {
+    "cyan_fraction_max": 0.21260850694444444,
+    "cyan_present": true,
+    "decode_failures": 0,
+    "frame_count": 450,
+    "frames_with_cyan": 450
+  },
+  "message_counts": {
+    "ACTUATOR_OUTPUT_STATUS": 812,
+    "ENCAPSULATED_DATA": 35,
+    "HEARTBEAT": 87,
+    "HIGHRES_IMU": 504,
+    "TIMESYNC": 80
+  },
+  "phase_imu": {},
+  "tool": "simulator_contract_probe",
+  "track_data": null
+}
