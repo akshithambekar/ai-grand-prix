@@ -1,0 +1,15 @@
+[project]
+name = "ai-grand-prix-vq2"
+version = "0.1.0"
+description = "MAVLink client for AI Grand Prix Virtual Qualifier 2"
+requires-python = ">=3.11"
+dependencies = [
+    "keyboard",
+    "matplotlib",
+    "numpy",
+    "opencv-python",
+    "pymavlink",
+]
+
+[tool.uv]
+package = false
