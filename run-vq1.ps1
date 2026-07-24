@@ -41,8 +41,12 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     }
 }
 
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $venvPython -c "import aigp_pilot, numpy, pymavlink" 2>$null
-if ($LASTEXITCODE -ne 0) {
+$importExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+if ($importExitCode -ne 0) {
     Write-Host "Installing pilot dependencies..."
     & $venvPython -m pip install -e $repoRoot
     if ($LASTEXITCODE -ne 0) {
