@@ -1,5 +1,8 @@
 # AI-GP Round 1 
 
+VQ1 simulator integration by **Abhinav Maddi** (GitHub:
+[@abhimaddi](https://github.com/abhimaddi)).
+
 [![demo](./demo.gif)]
 
 | config | gates | time | collisions |
